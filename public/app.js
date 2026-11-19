@@ -129,11 +129,78 @@
     </svg>`;
   }
 
+
+  // ───────── Photos : complétées depuis le navigateur si le serveur ne les a pas encore ─────────
+  const IMG_KEY = "hg_img_v1";
+  function photoHTML(car) {
+    return `<img class="card__photo" src="${esc(car.img.src)}" alt="${esc(car.brand + " " + car.model)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false" onerror="this.parentNode.classList.remove('has-photo');this.remove()"><span class="card__credit">© ${esc(car.img.artist)} · ${esc(car.img.license)}</span>`;
+  }
+  function patchCardPhotos(id) {
+    const car = state.byId[id];
+    $$(`.card[data-id="${id}"]:not(.is-locked) .card__art:not(.has-photo)`).forEach((art) => {
+      art.classList.add("has-photo");
+      art.insertAdjacentHTML("beforeend", photoHTML(car));
+    });
+  }
+  async function wikiApi(host, params) {
+    const url = `https://${host}/w/api.php?` + new URLSearchParams({ format: "json", formatversion: "2", origin: "*", ...params });
+    for (let t = 0; t < 3; t++) {
+      const r = await fetch(url);
+      if (r.status === 429) { await new Promise((ok) => setTimeout(ok, 3000 * (t + 1))); continue; }
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }
+    throw new Error("429");
+  }
+  async function findPhoto(car) {
+    const PI = { prop: "pageimages", piprop: "name", pilicense: "free", redirects: "1" };
+    let hit = null;
+    if (car.wikiEn) {
+      const j = await wikiApi("en.wikipedia.org", { action: "query", titles: car.wikiEn, ...PI });
+      const p = j.query?.pages?.[0];
+      if (p?.pageimage) hit = { host: "en.wikipedia.org", title: p.title, file: p.pageimage };
+    }
+    if (!hit) {
+      const q = `${car.brand} ${car.model.replace(/\s*\(\d{4}\)/, "")}`;
+      const bw = car.brand.split(/[\s-]/)[0].toLowerCase();
+      for (const host of ["fr.wikipedia.org", "en.wikipedia.org"]) {
+        const j = await wikiApi(host, { action: "query", generator: "search", gsrsearch: q, gsrlimit: "3", gsrnamespace: "0", ...PI });
+        const pages = (j.query?.pages || []).sort((a, b) => a.index - b.index);
+        const p = pages.find((x) => x.pageimage && x.title.toLowerCase().includes(bw)) || pages.find((x) => x.pageimage);
+        if (p) { hit = { host, title: p.title, file: p.pageimage }; break; }
+      }
+    }
+    if (!hit) return null;
+    const j = await wikiApi(hit.host, { action: "query", titles: "File:" + hit.file, prop: "imageinfo", iiprop: "url|extmetadata", iiurlwidth: "720", iiextmetadatafilter: "Artist|LicenseShortName" });
+    const ii = j.query?.pages?.[0]?.imageinfo?.[0];
+    if (!ii) return null;
+    const src = ii.thumburl || ii.url;
+    if (!/^https:\/\/(upload|thumb)\.wikimedia\.org\//.test(src)) return null;
+    const strip = (h) => String(h || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    const m = ii.extmetadata || {};
+    return { src, page: ii.descriptionurl, artist: strip(m.Artist?.value).slice(0, 80) || "Auteur inconnu", license: strip(m.LicenseShortName?.value) || "Licence libre", article: hit.title };
+  }
+  async function completePhotos() {
+    let cache = {};
+    try { cache = JSON.parse(localStorage.getItem(IMG_KEY) || "{}"); } catch {}
+    for (const car of state.catalog) if (!car.img && cache[car.id]) { car.img = cache[car.id]; patchCardPhotos(car.id); }
+    const missing = state.catalog.filter((c) => !c.img && cache[c.id] !== null);
+    for (const car of missing) {
+      try {
+        const img = await findPhoto(car);
+        cache[car.id] = img;
+        if (img) { car.img = img; patchCardPhotos(car.id); }
+        try { localStorage.setItem(IMG_KEY, JSON.stringify(cache)); } catch {}
+      } catch { break; }
+      await new Promise((ok) => setTimeout(ok, 250));
+    }
+  }
+
   // ───────── Carte ─────────
   function cardHTML(car, { locked = false, count = 0, isNew = false } = {}) {
     const pips = "<i></i>".repeat(car.rarity);
     const long = car.model.length > 13 ? " is-long" : "";
-    const photo = !locked && car.img ? `<img class="card__photo" src="${esc(car.img.src)}" alt="${esc(car.brand + " " + car.model)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false" onerror="this.parentNode.classList.remove('has-photo');this.remove()"><span class="card__credit">© ${esc(car.img.artist)} · ${esc(car.img.license)}</span>` : "";
+    const photo = !locked && car.img ? photoHTML(car) : "";
     const badge = isNew ? `<span class="card__badge card__badge--new">Nouvelle</span>` : count > 1 ? `<span class="card__badge">×${count}</span>` : "";
     return `<div class="card r${car.rarity}${locked ? " is-locked" : ""}" data-id="${car.id}">
       <div class="card__tilt"><div class="card__face">
@@ -737,5 +804,6 @@
     }
     try { state.me = await api("/api/me"); } catch { state.me = null; }
     render();
+    setTimeout(completePhotos, 1500);
   })();
 })();

@@ -5,7 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { CARS, RARITIES } = require("./data/cars");
 const { connect } = require("./db");
-const { resolveImages } = require("./images");
+const { resolveImages, EN_TITLES } = require("./images");
 
 const PORT = Number(process.env.PORT) || 3000;
 const PACK_INTERVAL = Number(process.env.PACK_INTERVAL_MIN || 5) * 60_000; // recharge toutes les 5 min
@@ -22,7 +22,12 @@ const CAR_IDS = new Set(CARS.map((c) => c.id));
 let CATALOG_JSON, CATALOG_ETAG;
 function buildCatalog(images = {}) {
   CATALOG_JSON = JSON.stringify({
-    cars: CARS.map((c) => (images[c.id] ? { ...c, img: images[c.id] } : c)),
+    cars: CARS.map((c) => {
+      const out = { ...c };
+      if (images[c.id]) out.img = images[c.id];
+      else if (EN_TITLES[c.id]) out.wikiEn = EN_TITLES[c.id];
+      return out;
+    }),
     rarities: RARITIES.filter(Boolean).map(({ id, name, weight }) => ({ id, name, weight })),
     config: { packInterval: PACK_INTERVAL, packsPerTick: PACKS_PER_TICK, maxPacks: MAX_PACKS, cardsPerPack: CARDS_PER_PACK, startPacks: START_PACKS },
   });
@@ -100,12 +105,12 @@ function send(res, status, body, headers = {}) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers });
   res.end(typeof body === "string" ? body : JSON.stringify(body));
 }
-function readJson(req) {
+function readJson(req, limit = 10_000) {
   return new Promise((resolve, reject) => {
     let data = "";
     req.on("data", (c) => {
       data += c;
-      if (data.length > 10_000) { reject(Object.assign(new Error("Requête trop volumineuse"), { status: 413 })); req.destroy(); }
+      if (data.length > limit) { reject(Object.assign(new Error("Requête trop volumineuse"), { status: 413 })); req.destroy(); }
     });
     req.on("end", () => {
       try { resolve(data ? JSON.parse(data) : {}); } catch { reject(Object.assign(new Error("JSON invalide"), { status: 400 })); }
@@ -160,17 +165,22 @@ async function main() {
     console.log("[migration] comptes existants remis à " + START_PACKS + " boosters minimum");
 
   // Photos réelles : chargées depuis la base, puis complétées en arrière-plan depuis Wikipédia
+  let loading = false;
   const loadImages = async () => {
+    if (loading) return;
+    loading = true;
     try {
       buildCatalog(await db.imageCache());
-      if (process.env.NO_IMAGE_FETCH) return;
-      buildCatalog(await resolveImages(CARS, db));
+      if (!process.env.NO_IMAGE_FETCH) buildCatalog(await resolveImages(CARS, db, console.log, buildCatalog));
     } catch (e) {
       console.error("[images]", e.message);
+    } finally {
+      loading = false;
     }
   };
   loadImages();
-  setInterval(loadImages, 6 * 3600_000).unref();
+  setInterval(loadImages, 3600_000).unref();
+
 
   async function currentUser(req) {
     const token = cookies(req).hg_session;
@@ -233,6 +243,27 @@ async function main() {
       send(res, 200, { ok: true }, { "Set-Cookie": sessionCookie(req, "", 0) });
     },
 
+    // Import de photos (Wikimedia) par l'administrateur, protégé par ADMIN_TOKEN
+    "POST /api/admin/images": async (req, res) => {
+      const token = new URL(req.url, "http://x").searchParams.get("token") || "";
+      const expected = process.env.ADMIN_TOKEN || "";
+      const a = Buffer.from(sha(token)), b = Buffer.from(sha(expected));
+      if (!expected || expected.length < 16 || !crypto.timingSafeEqual(a, b)) return send(res, 403, { error: "Interdit" });
+      const body = await readJson(req, 300_000);
+      let added = 0;
+      const clean = (t, n) => String(t || "").replace(/[<>]/g, "").slice(0, n);
+      for (const [id, v] of Object.entries(body || {})) {
+        if (!CAR_IDS.has(id) || !v || typeof v !== "object") continue;
+        const src = String(v.src || ""), page = String(v.page || "");
+        if (!/^https:\/\/(upload|thumb)\.wikimedia\.org\/[^\s"'<>]+$/.test(src) || src.length > 800) continue;
+        if (!/^https:\/\/(commons\.wikimedia\.org|[a-z]{2}\.wikipedia\.org)\/wiki\/[^\s"'<>]+$/.test(page) || page.length > 800) continue;
+        await db.setImage(id, { src, page, artist: clean(v.artist, 80) || "Auteur inconnu", license: clean(v.license, 40) || "Licence libre", article: clean(v.article, 120) });
+        added++;
+      }
+      buildCatalog(await db.imageCache());
+      send(res, 200, { added });
+    },
+
     "GET /api/me": async (req, res) => {
       const user = await currentUser(req);
       if (!user) return send(res, 401, { error: "Non connecté" });
@@ -260,7 +291,7 @@ async function main() {
     const key = `${req.method} ${url.pathname}`;
     try {
       if (routes[key]) {
-        if (req.method === "POST") {
+        if (req.method === "POST" && key !== "POST /api/admin/images") {
           // protection CSRF : la requête doit venir du site lui-même
           const origin = req.headers.origin;
           if (origin && new URL(origin).host !== req.headers.host) return send(res, 403, { error: "Origine refusée" });

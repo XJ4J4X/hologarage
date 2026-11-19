@@ -118,11 +118,24 @@ const EN_TITLES = {
 
 const strip = (html) => String(html || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+class RateLimited extends Error {}
+
+// Requêtes lentes et polies : une à la fois, pause entre chaque, attente si Wikipédia demande de ralentir
 async function api(host, params) {
-  const url = `https://${host}/w/api.php?` + new URLSearchParams({ format: "json", formatversion: "2", origin: "*", ...params });
-  const res = await fetch(url, { headers: { "User-Agent": UA, "Api-User-Agent": UA }, signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new Error(`${host} HTTP ${res.status}`);
-  return res.json();
+  const url = `https://${host}/w/api.php?` + new URLSearchParams({ format: "json", formatversion: "2", maxlag: "5", ...params });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await sleep(1500);
+    const res = await fetch(url, { headers: { "User-Agent": UA, "Api-User-Agent": UA }, signal: AbortSignal.timeout(20000) });
+    if (res.status === 429 || res.status === 503) {
+      const wait = Math.min(120, Number(res.headers.get("retry-after")) || 30 * (attempt + 1));
+      await sleep(wait * 1000);
+      continue;
+    }
+    if (!res.ok) throw new Error(`${host} HTTP ${res.status}`);
+    return res.json();
+  }
+  throw new RateLimited(`${host} limite de requêtes`);
 }
 
 const PI = { prop: "pageimages", piprop: "name", pilicense: "free", redirects: "1" };
@@ -174,40 +187,28 @@ async function fileInfo(host, files) {
   return out;
 }
 
-async function resolveImages(cars, db, log = console.log) {
+async function resolveImages(cars, db, log = console.log, onProgress = () => {}) {
   const cached = await db.imageCache();
   const todo = cars.filter((c) => !cached[c.id]); // absentes ou sans photo : on (re)cherche
   if (!todo.length) return cached;
   log(`[images] recherche de ${todo.length} photos sur Wikipédia…`);
-  const found = [];
-  let i = 0;
-  await Promise.all(Array.from({ length: 4 }, async () => {
-    while (i < todo.length) {
-      const car = todo[i++];
-      try {
-        const r = await findImage(car);
-        found.push([car, r]);
-      } catch (e) {
-        log(`[images] ${car.id} : ${e.message}`);
-      }
-    }
-  }));
-  const byHost = {};
-  for (const [, r] of found) if (r) (byHost[r.host] ||= []).push(r.file);
-  const infos = {};
-  for (const [host, files] of Object.entries(byHost)) {
-    try { Object.assign(infos, await fileInfo(host, [...new Set(files)])); }
-    catch (e) { log(`[images] métadonnées ${host} : ${e.message}`); }
-  }
   let ok = 0;
-  for (const [car, r] of found) {
-    const info = r && (infos[r.file] || infos[r.file.replace(/_/g, " ")]);
-    const data = info ? { ...info, article: r.title } : null;
-    if (data) ok++;
-    await db.setImage(car.id, data);
+  for (const car of todo) {
+    try {
+      const r = await findImage(car);
+      if (!r) continue;
+      const info = await fileInfo(r.host, [r.file]);
+      const data = info[r.file] || Object.values(info)[0];
+      if (!data) continue;
+      await db.setImage(car.id, { ...data, article: r.title });
+      if (++ok % 5 === 0) onProgress(await db.imageCache());
+    } catch (e) {
+      log(`[images] ${car.id} : ${e.message}`);
+      if (e instanceof RateLimited) { log("[images] Wikipédia demande de ralentir : nouvel essai dans une heure"); break; }
+    }
   }
   log(`[images] ${ok} photos trouvées sur ${todo.length}`);
   return db.imageCache();
 }
 
-module.exports = { resolveImages };
+module.exports = { resolveImages, EN_TITLES };
