@@ -1,6 +1,6 @@
 # HoloGarage
 
-Jeu de cartes à collectionner de voitures : 191 modèles, 6 niveaux de rareté, cartes holographiques en 3D, boosters gratuits qui se rechargent et classeur 3D aux pages qui se tournent. Comptes avec pseudo et mot de passe.
+Jeu de cartes à collectionner de voitures : 191 modèles avec de vraies photos (Wikimedia Commons, licences libres, auteur crédité), 6 niveaux de rareté, cartes holographiques en 3D, boosters à découper à la souris et classeur 3D aux pages qui se tournent. Comptes avec pseudo et mot de passe.
 
 ## Lancer en local
 
@@ -31,10 +31,17 @@ npm run dev          # pareil, mais un booster toutes les minutes pour tester
 | Variable | Rôle | Par défaut |
 |---|---|---|
 | `DATABASE_URL` | URL PostgreSQL. Sans elle, SQLite local. | — |
-| `PACK_INTERVAL_MIN` | Minutes entre deux boosters gratuits | `120` |
+| `START_PACKS` | Boosters offerts à l'inscription | `10` |
+| `PACK_INTERVAL_MIN` | Minutes entre deux recharges | `5` |
+| `PACKS_PER_TICK` | Boosters donnés à chaque recharge | `2` |
+| `MAX_PACKS` | Réserve maximale | `20` |
 | `PORT` | Port HTTP (Render le définit tout seul) | `3000` |
 
-Les autres réglages (5 boosters max en réserve, 3 au départ, 5 cartes par booster) sont en haut de `server.js`.
+Le nombre de cartes par booster (5) est en haut de `server.js`.
+
+## Photos
+
+Au démarrage, le serveur cherche pour chaque voiture la photo principale de son article Wikipédia, uniquement si elle est sous licence libre, et enregistre l'adresse, l'auteur et la licence en base. Les recherches suivantes ne portent que sur les voitures encore sans photo. Pour forcer une photo précise, ajoute le titre exact de l'article Wikipédia (en anglais) dans `EN_TITLES` de `images.js`, puis vide la ligne de cette voiture dans la table `car_images`.
 
 ## Ajouter ou modifier des voitures
 

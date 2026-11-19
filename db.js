@@ -28,6 +28,15 @@ const SCHEMA = (pg) => [
      PRIMARY KEY (user_id, car_id)
    )`,
   `CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id)`,
+  `CREATE TABLE IF NOT EXISTS car_images (
+     car_id TEXT PRIMARY KEY,
+     data TEXT,
+     updated_at BIGINT NOT NULL
+   )`,
+  `CREATE TABLE IF NOT EXISTS meta (
+     key TEXT PRIMARY KEY,
+     value TEXT
+   )`,
 ];
 
 async function connect() {
@@ -124,6 +133,26 @@ function makeApi(q, tx) {
     },
     async collection(userId) {
       return (await q(`SELECT car_id, count, first_at FROM collection WHERE user_id = $1`, [userId])).map(num);
+    },
+    async imageCache() {
+      const out = {};
+      for (const r of await q(`SELECT car_id, data FROM car_images`)) out[r.car_id] = r.data ? JSON.parse(r.data) : null;
+      return out;
+    },
+    async setImage(carId, data) {
+      await q(
+        `INSERT INTO car_images (car_id, data, updated_at) VALUES ($1,$2,$3)
+         ON CONFLICT (car_id) DO UPDATE SET data = $2, updated_at = $3`,
+        [carId, data ? JSON.stringify(data) : null, Date.now()]
+      );
+    },
+    // Migrations ponctuelles (exécutées une seule fois)
+    async once(key, fn) {
+      const done = await q(`SELECT key FROM meta WHERE key = $1`, [key]);
+      if (done.length) return false;
+      await fn(q);
+      await q(`INSERT INTO meta (key, value) VALUES ($1, $2)`, [key, String(Date.now())]);
+      return true;
     },
     // Ouvre un booster de façon atomique : décrémente le stock (si toujours égal à `expected`) et range les cartes.
     async openPack(userId, expected, clock, cars, now) {

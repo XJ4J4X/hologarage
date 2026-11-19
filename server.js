@@ -5,11 +5,13 @@ const path = require("path");
 const crypto = require("crypto");
 const { CARS, RARITIES } = require("./data/cars");
 const { connect } = require("./db");
+const { resolveImages } = require("./images");
 
 const PORT = Number(process.env.PORT) || 3000;
-const PACK_INTERVAL = Number(process.env.PACK_INTERVAL_MIN || 120) * 60_000; // un booster toutes les 2 h
-const MAX_PACKS = 5;
-const START_PACKS = 3;
+const PACK_INTERVAL = Number(process.env.PACK_INTERVAL_MIN || 5) * 60_000; // recharge toutes les 5 min
+const PACKS_PER_TICK = Number(process.env.PACKS_PER_TICK || 2); // 2 boosters par recharge
+const MAX_PACKS = Number(process.env.MAX_PACKS || 20);
+const START_PACKS = Number(process.env.START_PACKS || 10);
 const CARDS_PER_PACK = 5;
 const SESSION_DAYS = 30;
 const PUBLIC = path.join(__dirname, "public");
@@ -17,12 +19,16 @@ const PUBLIC = path.join(__dirname, "public");
 const BY_RARITY = {};
 for (const c of CARS) (BY_RARITY[c.rarity] ||= []).push(c);
 const CAR_IDS = new Set(CARS.map((c) => c.id));
-const CATALOG_JSON = JSON.stringify({
-  cars: CARS,
-  rarities: RARITIES.filter(Boolean).map(({ id, name, weight }) => ({ id, name, weight })),
-  config: { packInterval: PACK_INTERVAL, maxPacks: MAX_PACKS, cardsPerPack: CARDS_PER_PACK },
-});
-const CATALOG_ETAG = '"' + crypto.createHash("sha1").update(CATALOG_JSON).digest("hex").slice(0, 16) + '"';
+let CATALOG_JSON, CATALOG_ETAG;
+function buildCatalog(images = {}) {
+  CATALOG_JSON = JSON.stringify({
+    cars: CARS.map((c) => (images[c.id] ? { ...c, img: images[c.id] } : c)),
+    rarities: RARITIES.filter(Boolean).map(({ id, name, weight }) => ({ id, name, weight })),
+    config: { packInterval: PACK_INTERVAL, packsPerTick: PACKS_PER_TICK, maxPacks: MAX_PACKS, cardsPerPack: CARDS_PER_PACK, startPacks: START_PACKS },
+  });
+  CATALOG_ETAG = '"' + crypto.createHash("sha1").update(CATALOG_JSON).digest("hex").slice(0, 16) + '"';
+}
+buildCatalog();
 
 // ───── tirage ─────
 function rollRarity(minRarity = 1) {
@@ -49,7 +55,7 @@ function refill(user, now) {
   let { packs, pack_clock: clock } = user;
   if (packs >= MAX_PACKS) return { packs, clock: now, nextIn: null };
   const gained = Math.max(0, Math.floor((now - clock) / PACK_INTERVAL));
-  packs = Math.min(MAX_PACKS, packs + gained);
+  packs = Math.min(MAX_PACKS, packs + gained * PACKS_PER_TICK);
   clock = packs >= MAX_PACKS ? now : clock + gained * PACK_INTERVAL;
   return { packs, clock, nextIn: packs >= MAX_PACKS ? null : clock + PACK_INTERVAL - now };
 }
@@ -148,6 +154,23 @@ function serveStatic(req, res, pathname) {
 async function main() {
   const db = await connect();
   setInterval(() => db.purgeSessions(Date.now()).catch(() => {}), 3600_000).unref();
+
+  // Les comptes créés avant le passage à 10 boosters de départ sont remis à niveau une fois
+  if (await db.once("bonus-10-boosters", (q) => q(`UPDATE users SET packs = CASE WHEN packs < $1 THEN $1 ELSE packs END`, [START_PACKS])))
+    console.log("[migration] comptes existants remis à " + START_PACKS + " boosters minimum");
+
+  // Photos réelles : chargées depuis la base, puis complétées en arrière-plan depuis Wikipédia
+  const loadImages = async () => {
+    try {
+      buildCatalog(await db.imageCache());
+      if (process.env.NO_IMAGE_FETCH) return;
+      buildCatalog(await resolveImages(CARS, db));
+    } catch (e) {
+      console.error("[images]", e.message);
+    }
+  };
+  loadImages();
+  setInterval(loadImages, 6 * 3600_000).unref();
 
   async function currentUser(req) {
     const token = cookies(req).hg_session;

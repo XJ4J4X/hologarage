@@ -133,13 +133,14 @@
   function cardHTML(car, { locked = false, count = 0, isNew = false } = {}) {
     const pips = "<i></i>".repeat(car.rarity);
     const long = car.model.length > 13 ? " is-long" : "";
+    const photo = !locked && car.img ? `<img class="card__photo" src="${esc(car.img.src)}" alt="${esc(car.brand + " " + car.model)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false" onerror="this.parentNode.classList.remove('has-photo');this.remove()"><span class="card__credit">© ${esc(car.img.artist)} · ${esc(car.img.license)}</span>` : "";
     const badge = isNew ? `<span class="card__badge card__badge--new">Nouvelle</span>` : count > 1 ? `<span class="card__badge">×${count}</span>` : "";
     return `<div class="card r${car.rarity}${locked ? " is-locked" : ""}" data-id="${car.id}">
       <div class="card__tilt"><div class="card__face">
         <div class="card__frame">
           <header class="card__head"><span class="card__brand">${locked ? "Non obtenue" : esc(car.brand)}</span><span class="card__pips" aria-label="${rarityName(car.rarity)}">${pips}</span></header>
           <h3 class="card__model${long}">${locked ? "???" : esc(car.model)}</h3>
-          <div class="card__art">${locked ? "" : `<span class="card__mark">${esc(car.brand)}</span>`}${carSVG(car, locked)}</div>
+          <div class="card__art${photo ? " has-photo" : ""}">${locked ? "" : `<span class="card__mark">${esc(car.brand)}</span>`}${carSVG(car, locked)}${photo}</div>
           <dl class="card__stats">
             <div><dt>Année</dt><dd>${locked ? "—" : car.year}</dd></div>
             <div><dt>Puissance</dt><dd>${locked ? "—" : fmtNum(car.hp) + " ch"}</dd></div>
@@ -254,7 +255,7 @@
             ${reg ? "<small>Au moins 6 caractères</small>" : ""}
           </div>
           <p class="form-error" id="form-error" role="alert"></p>
-          <button class="btn" type="submit">${reg ? "Créer mon compte et recevoir 3 boosters" : "Se connecter"}</button>
+          <button class="btn" type="submit">${reg ? `Créer mon compte et recevoir ${state.config.startPacks} boosters` : "Se connecter"}</button>
         </form>
       </div>
     </section>`;
@@ -273,7 +274,7 @@
         state.me = await api(reg ? "/api/register" : "/api/login", { pseudo, password });
         if (!location.hash) location.hash = "#boosters";
         render();
-        if (reg) toast(`Bienvenue ${state.me.pseudo} ! 3 boosters t'attendent.`);
+        if (reg) toast(`Bienvenue ${state.me.pseudo} ! ${state.config.startPacks} boosters t'attendent.`);
       } catch (ex) {
         err.textContent = ex.message;
         btn.disabled = false;
@@ -290,9 +291,8 @@
   function packHTML(n) {
     const ghosts = Array.from({ length: Math.min(n, 5) - 1 }, (_, i) => `<div class="pack__ghost" style="--i:${Math.min(n, 5) - 1 - i}"></div>`).join("");
     const hero = state.catalog.find((c) => c.id === "mclaren-f1-1992") || state.catalog[0];
-    return `<button class="pack" id="pack" type="button" aria-label="Ouvrir un booster">
+    return `<div class="pack" id="pack" role="group" aria-label="Booster : glisse le long des pointillés pour le découper">
       <div class="pack__stack">${ghosts}</div>
-      <div class="pack__top"></div>
       <div class="pack__body">
         <div class="pack__label">
           <div class="pack__brand">Holo<span>Garage</span></div>
@@ -300,28 +300,37 @@
           <div class="pack__info"><span>Booster</span><span><b>${state.config.cardsPerPack}</b> cartes</span></div>
         </div>
       </div>
+      <div class="pack__top"></div>
+      <div class="pack__flap"></div>
       <div class="pack__tear"></div>
-    </button>`;
+      <div class="pack__cutline"></div>
+      <div class="pack__spark"></div>
+      <div class="pack__hint" aria-hidden="true"><span class="pack__scissors">✂</span> Glisse le long des pointillés</div>
+    </div>`;
   }
+  const packWord = (n) => (n > 1 ? "boosters" : "booster");
   function renderPacks() {
     const me = state.me;
+    const cfg = state.config;
     const deadline = me.nextPackIn != null ? Date.now() + me.nextPackIn : null;
     const total = state.rarities.reduce((s, r) => s + r.weight, 0);
+    const every = cfg.packInterval >= 3600000 ? `${Math.round(cfg.packInterval / 3600000)} h` : `${Math.round(cfg.packInterval / 60000)} min`;
     app.innerHTML = `<section class="page">
       <div class="packs">
         <div class="stage" id="stage">
-          ${me.packs > 0 ? packHTML(me.packs) : `<p class="pack-empty"><strong>Plus de booster pour l'instant</strong>Un nouveau booster arrive automatiquement. Va admirer ta collection en attendant.</p>`}
+          ${me.packs > 0 ? packHTML(me.packs) : `<p class="pack-empty"><strong>Plus de booster pour l'instant</strong>De nouveaux boosters arrivent automatiquement. Va admirer ta collection en attendant.</p>`}
+          ${me.packs > 0 ? `<button class="btn-ghost pack-auto" type="button" id="auto-open">Ouvrir sans découper</button>` : ""}
           <div class="reveal" id="reveal"></div>
         </div>
         <aside class="side">
           <div>
-            <div class="counter"><b id="pack-count">${me.packs}</b><span>${me.packs > 1 ? "boosters prêts à ouvrir" : "booster prêt à ouvrir"}</span></div>
-            <p class="timer" id="timer">${deadline ? `Prochain booster gratuit dans <b>${fmtDuration(deadline - Date.now())}</b>` : `Réserve pleine : ouvre un booster pour relancer la recharge.`}</p>
+            <div class="counter"><b id="pack-count">${me.packs}</b><span>${packWord(me.packs)} prêt${me.packs > 1 ? "s" : ""} à ouvrir</span></div>
+            <p class="timer" id="timer">${deadline ? `+${cfg.packsPerTick} ${packWord(cfg.packsPerTick)} dans <b>${fmtDuration(deadline - Date.now())}</b>` : `Réserve pleine (${cfg.maxPacks}) : ouvre un booster pour relancer la recharge.`}</p>
           </div>
           <div>
             <p class="odds-title">Chances par carte</p>
             <ul class="odds">${state.rarities.slice().reverse().map((r) => `<li style="--c:var(${RARITY_VAR[r.id]})">${r.name}<span>${(r.weight / total * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %</span></li>`).join("")}</ul>
-            <p class="odds-note">La 5ᵉ carte de chaque booster est au moins Rare. Un booster gratuit toutes les ${Math.round(state.config.packInterval / 3600000)} h, jusqu'à ${state.config.maxPacks} en réserve.</p>
+            <p class="odds-note">La 5ᵉ carte de chaque booster est au moins Rare. Tu reçois ${cfg.packsPerTick} ${packWord(cfg.packsPerTick)} gratuits toutes les ${every}, jusqu'à ${cfg.maxPacks} en réserve.</p>
           </div>
         </aside>
       </div>
@@ -342,23 +351,101 @@
     const pack = $("#pack");
     if (pack) {
       tilt(pack, { strength: 0.8 });
-      pack.addEventListener("click", () => openPack(pack));
+      setupCutting(pack);
     }
   }
 
-  async function openPack(pack) {
-    if (state.opening) return;
+  // ───────── Découpe du booster à la souris / au doigt ─────────
+  function setupCutting(pack) {
+    let cut = 0, dragging = false, finished = false, request = null, lastFlake = 0;
+    const setCut = (v) => {
+      cut = Math.min(1, Math.max(cut, v));
+      pack.style.setProperty("--cut", cut.toFixed(4));
+      if (cut > 0) pack.classList.add("is-cutting");
+      if (cut > 0.55 && !request) request = fetchPack();
+      if (cut >= 0.96) finish();
+    };
+    const flake = () => {
+      const now = performance.now();
+      if (reduceMotion || now - lastFlake < 35) return;
+      lastFlake = now;
+      const f = document.createElement("i");
+      f.className = "pack__flake";
+      f.style.left = `${cut * 100}%`;
+      f.style.setProperty("--h", Math.floor(Math.random() * 360));
+      pack.appendChild(f);
+      const dx = (Math.random() - 0.5) * 80, dy = 40 + Math.random() * 90, rot = (Math.random() - 0.5) * 720;
+      f.animate(
+        [{ transform: "translate(-50%,-50%) scale(1)", opacity: 1 }, { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) rotate(${rot}deg) scale(.4)`, opacity: 0 }],
+        { duration: 700 + Math.random() * 400, easing: "cubic-bezier(.2,.6,.4,1)" }
+      ).onfinish = () => f.remove();
+    };
+    const ratio = (e) => {
+      const r = pack.getBoundingClientRect();
+      return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+    };
+    pack.addEventListener("pointerdown", (e) => {
+      if (finished) return;
+      const { x, y } = ratio(e);
+      if (y > 0.42 || x > cut + 0.22) {
+        pack.querySelector(".pack__hint").animate([{ transform: "translate(-50%,0)" }, { transform: "translate(-50%,-8px)" }, { transform: "translate(-50%,0)" }], { duration: 400 });
+        return;
+      }
+      dragging = true;
+      pack.setPointerCapture(e.pointerId);
+      pack.classList.add("is-dragging");
+      setCut(Math.max(cut, Math.min(x, cut + 0.05)));
+      e.preventDefault();
+    });
+    pack.addEventListener("pointermove", (e) => {
+      if (!dragging || finished) return;
+      const { x } = ratio(e);
+      if (x > cut && x <= cut + 0.3) { setCut(x); flake(); }
+    });
+    const stop = () => { dragging = false; pack.classList.remove("is-dragging"); };
+    pack.addEventListener("pointerup", stop);
+    pack.addEventListener("pointercancel", stop);
+
+    $("#auto-open")?.addEventListener("click", () => {
+      if (finished) return;
+      const from = cut, t0 = performance.now(), dur = reduceMotion ? 1 : 750;
+      const step = (t) => {
+        const k = Math.min(1, (t - t0) / dur);
+        setCut(from + (1 - from) * (1 - Math.pow(1 - k, 3)));
+        flake();
+        if (k < 1 && !finished) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+
+    async function finish() {
+      if (finished) return;
+      finished = true;
+      dragging = false;
+      pack.style.setProperty("--cut", "1");
+      pack.classList.add("is-open");
+      $("#auto-open")?.remove();
+      if (!request) request = fetchPack();
+      const result = await request;
+      if (!result) return;
+      setTimeout(() => revealPack(pack, result), reduceMotion ? 0 : 350);
+    }
+  }
+
+  async function fetchPack() {
     state.opening = true;
-    pack.disabled = true;
-    let result;
     try {
-      result = await api("/api/packs/open", {});
+      return await api("/api/packs/open", {});
     } catch (e) {
       state.opening = false;
       toast(e.message);
       state.me = await api("/api/me").catch(() => state.me);
-      return render();
+      render();
+      return null;
     }
+  }
+
+  function revealPack(pack, result) {
     clearInterval(render.timer);
     // mise à jour locale de la collection
     const before = new Set(Object.keys(state.me.collection));
@@ -375,7 +462,7 @@
     setTopbar();
     $("#pack-count").textContent = result.packs;
 
-    pack.classList.add("is-open");
+    pack.classList.add("is-gone");
     const reveal = $("#reveal");
     const cards = result.cards.map((id) => state.byId[id]);
     reveal.innerHTML = `<div class="reveal__row">` + cards.map((car, i) => `<button class="flip${car.rarity >= 4 ? " is-hot" : ""}" type="button" style="--i:${i};--hc:var(${RARITY_VAR[car.rarity]})" data-id="${car.id}" aria-label="Retourner la carte ${i + 1}">
@@ -575,6 +662,7 @@
           <div class="viewer__rarity" style="--c:var(${RARITY_VAR[car.rarity]})">${rarityName(car.rarity)}</div>
           ${own ? `<p class="viewer__desc">${esc(car.desc)}</p>
           <dl class="viewer__facts"><div><dt>Année</dt><dd>${car.year}</dd></div><div><dt>Puissance</dt><dd>${fmtNum(car.hp)} ch</dd></div><div><dt>Origine</dt><dd>${esc(car.country)}</dd></div></dl>
+          ${car.img ? `<p class="viewer__credit">Photo : <a href="${esc(car.img.page)}" target="_blank" rel="noopener">${esc(car.img.artist)}</a>, ${esc(car.img.license)}, via Wikimedia Commons</p>` : ""}
           <p class="viewer__owned">${own.count > 1 ? `Tu possèdes ${own.count} exemplaires.` : "Tu possèdes 1 exemplaire."} Obtenue le ${firstSeen}.</p>`
           : `<p class="viewer__desc">Cette carte t'attend dans un booster. Plus elle est rare, plus elle brille.</p>`}
           <div class="viewer__nav">
