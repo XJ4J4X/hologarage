@@ -41,7 +41,7 @@ Le nombre de cartes par booster (5) est en haut de `server.js`.
 
 ## Photos
 
-Au démarrage, le serveur cherche pour chaque voiture la photo principale de son article Wikipédia, uniquement si elle est sous licence libre, et enregistre l'adresse, l'auteur et la licence en base. Les recherches suivantes ne portent que sur les voitures encore sans photo. Pour forcer une photo précise, ajoute le titre exact de l'article Wikipédia (en anglais) dans `EN_TITLES` de `images.js`, puis vide la ligne de cette voiture dans la table `car_images`.
+Au démarrage, le serveur cherche pour chaque voiture la photo principale de son article Wikipédia, uniquement si elle est sous licence libre, et enregistre l'adresse, l'auteur et la licence en base. Les recherches suivantes ne portent que sur les voitures encore sans photo. Wikipédia limite souvent les requêtes venant des serveurs de Render : la recherche se fait donc lentement, une voiture à la fois, et reprend toutes les heures. Si une photo manque encore, le navigateur du joueur la cherche lui-même et la garde en mémoire. On peut aussi importer d'un coup une liste de photos avec `POST /api/admin/images?token=ADMIN_TOKEN` (corps JSON : `{ "id-de-la-voiture": { src, page, artist, license, article } }`, seules les adresses Wikimedia sont acceptées). Pour forcer une photo précise, ajoute le titre exact de l'article Wikipédia (en anglais) dans `EN_TITLES` de `images.js`, puis vide la ligne de cette voiture dans la table `car_images`.
 
 ## Ajouter ou modifier des voitures
 
