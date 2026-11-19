@@ -1,0 +1,22 @@
+# Blueprint Render : un service web Node + une base PostgreSQL
+services:
+  - type: web
+    name: hologarage
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22.13.0"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: hologarage-db
+          property: connectionString
+
+databases:
+  - name: hologarage-db
+    plan: free
+    databaseName: hologarage
+    user: hologarage

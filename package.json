@@ -1,0 +1,17 @@
+{
+  "name": "hologarage",
+  "version": "1.0.0",
+  "description": "Jeu de cartes à collectionner de voitures : boosters, cartes holographiques et classeur 3D",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "PACK_INTERVAL_MIN=1 node server.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}

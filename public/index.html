@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>HoloGarage — cartes de voitures à collectionner</title>
+  <meta name="description" content="Ouvre des boosters, collectionne des cartes holographiques de voitures et range-les dans ton classeur 3D.">
+  <meta name="theme-color" content="#0f1828">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar" hidden>
+    <a class="wordmark" href="#boosters" aria-label="HoloGarage, accueil">Holo<span>Garage</span></a>
+    <nav class="tabs" aria-label="Navigation principale">
+      <a href="#boosters" data-view="boosters">Boosters</a>
+      <a href="#classeur" data-view="classeur">Classeur</a>
+    </nav>
+    <div class="who">
+      <span class="who__progress" id="progress"></span>
+      <span class="who__name" id="who"></span>
+      <button class="btn-ghost" id="logout" type="button">Se déconnecter</button>
+    </div>
+  </header>
+  <main id="app" tabindex="-1"></main>
+  <div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-labelledby="viewer-title"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
