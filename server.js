@@ -13,12 +13,16 @@ const PACKS_PER_TICK = Number(process.env.PACKS_PER_TICK || 2); // 2 boosters pa
 const MAX_PACKS = Number(process.env.MAX_PACKS || 20);
 const START_PACKS = Number(process.env.START_PACKS || 10);
 const CARDS_PER_PACK = 5;
+const PACK_COST = 10; // points garage pour acheter un booster
+const RECYCLE_VALUE = { 1: 1, 2: 2, 3: 5, 4: 12, 5: 30, 6: 80 }; // points par double selon la rareté
 const SESSION_DAYS = 30;
 const PUBLIC = path.join(__dirname, "public");
 
 const BY_RARITY = {};
 for (const c of CARS) (BY_RARITY[c.rarity] ||= []).push(c);
 const CAR_IDS = new Set(CARS.map((c) => c.id));
+const CAR_BY_ID = Object.fromEntries(CARS.map((c) => [c.id, c]));
+let leaderboardCache = null;
 let CATALOG_JSON, CATALOG_ETAG;
 function buildCatalog(images = {}) {
   CATALOG_JSON = JSON.stringify({
@@ -29,7 +33,7 @@ function buildCatalog(images = {}) {
       return out;
     }),
     rarities: RARITIES.filter(Boolean).map(({ id, name, weight }) => ({ id, name, weight })),
-    config: { packInterval: PACK_INTERVAL, packsPerTick: PACKS_PER_TICK, maxPacks: MAX_PACKS, cardsPerPack: CARDS_PER_PACK, startPacks: START_PACKS },
+    config: { packInterval: PACK_INTERVAL, packsPerTick: PACKS_PER_TICK, maxPacks: MAX_PACKS, cardsPerPack: CARDS_PER_PACK, startPacks: START_PACKS, packCost: PACK_COST, recycleValue: RECYCLE_VALUE },
   });
   CATALOG_ETAG = '"' + crypto.createHash("sha1").update(CATALOG_JSON).digest("hex").slice(0, 16) + '"';
 }
@@ -201,7 +205,7 @@ async function main() {
     const rows = await db.collection(user.id);
     const collection = {};
     for (const row of rows) if (CAR_IDS.has(row.car_id)) collection[row.car_id] = { count: row.count, first: row.first_at };
-    return { pseudo: user.pseudo, packs: r.packs, nextPackIn: r.nextIn, opened: user.opened, collection };
+    return { pseudo: user.pseudo, packs: r.packs, nextPackIn: r.nextIn, opened: user.opened, points: user.points || 0, collection };
   }
 
   function validCreds(body) {
@@ -264,6 +268,49 @@ async function main() {
       send(res, 200, { added });
     },
 
+    "POST /api/recycle": async (req, res) => {
+      const user = await currentUser(req);
+      if (!user) return send(res, 401, { error: "Non connecté" });
+      const values = Object.fromEntries(CARS.map((c) => [c.id, RECYCLE_VALUE[c.rarity] || 1]));
+      const r = await db.recycle(user.id, values);
+      leaderboardCache = null;
+      send(res, 200, r);
+    },
+
+    "POST /api/packs/buy": async (req, res) => {
+      const user = await currentUser(req);
+      if (!user) return send(res, 401, { error: "Non connecté" });
+      const now = Date.now();
+      const r = refill(user, now);
+      if (r.packs !== user.packs || r.clock !== user.pack_clock) await db.setPacks(user.id, r.packs, r.clock);
+      const out = await db.buyPack(user.id, PACK_COST);
+      if (!out) return send(res, 400, { error: `Il te faut ${PACK_COST} points garage pour acheter un booster.` });
+      const after = refill({ packs: out.packs, pack_clock: r.clock }, now);
+      send(res, 200, { points: out.points, packs: after.packs, nextPackIn: after.nextIn });
+    },
+
+    "GET /api/leaderboard": async (req, res) => {
+      const user = await currentUser(req);
+      if (!leaderboardCache || Date.now() - leaderboardCache.t > 30_000) {
+        const byUser = new Map();
+        for (const row of await db.allCollections()) {
+          let u = byUser.get(row.user_id);
+          if (!u) byUser.set(row.user_id, (u = { pseudo: row.pseudo, cards: 0, score: 0, best: 0 }));
+          const car = row.car_id && CAR_BY_ID[row.car_id];
+          if (!car) continue;
+          u.cards++;
+          u.score += RECYCLE_VALUE[car.rarity] || 1;
+          u.best = Math.max(u.best, car.rarity);
+        }
+        const list = [...byUser.values()].sort((a, b) => b.cards - a.cards || b.score - a.score || a.pseudo.localeCompare(b.pseudo));
+        list.forEach((u, i) => (u.rank = i + 1));
+        leaderboardCache = { t: Date.now(), list };
+      }
+      const list = leaderboardCache.list;
+      const me = user ? list.find((u) => u.pseudo === user.pseudo) : null;
+      send(res, 200, { players: list.length, top: list.slice(0, 50), me });
+    },
+
     "GET /api/me": async (req, res) => {
       const user = await currentUser(req);
       if (!user) return send(res, 401, { error: "Non connecté" });
@@ -282,6 +329,7 @@ async function main() {
       const left = await db.openPack(user.id, r.packs, r.clock, cards, now);
       if (left === null) return send(res, 409, { error: "Booster déjà ouvert dans un autre onglet. Recharge la page." });
       const after = refill({ packs: left, pack_clock: r.clock }, now);
+      leaderboardCache = null;
       send(res, 200, { cards, packs: after.packs, nextPackIn: after.nextIn });
     },
   };

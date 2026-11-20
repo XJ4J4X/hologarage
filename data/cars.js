@@ -227,6 +227,15 @@ const CARS = RAW.map(([brand, model, year, body, rarity, hp, country, desc], i) 
   brand, model, year, body, rarity, hp, country, desc,
 }));
 
+// Fiches détaillées (moteur, vitesse max, 0-100, texte long), dans le même ordre que RAW
+const DETAILS = [...require("./details-1"), ...require("./details-2")];
+if (DETAILS.length !== CARS.length) throw new Error(`Fiches : ${DETAILS.length} pour ${CARS.length} voitures`);
+CARS.forEach((c, i) => {
+  const [model, engine, vmax, acc, long] = DETAILS[i];
+  if (model !== c.model) throw new Error(`Fiche n°${i + 1} : « ${model} » ne correspond pas à « ${c.model} »`);
+  Object.assign(c, { engine, vmax, acc, long });
+});
+
 // sécurité : identifiants uniques
 const seen = new Set();
 for (const c of CARS) {

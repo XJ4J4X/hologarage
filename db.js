@@ -50,6 +50,7 @@ async function connect() {
     });
     const q = async (sql, params = []) => (await pool.query(sql, params)).rows;
     for (const s of SCHEMA(true)) await q(s);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS points INTEGER NOT NULL DEFAULT 0`);
     console.log("[db] PostgreSQL connecté");
     return makeApi(q, async (fn) => {
       const client = await pool.connect();
@@ -79,6 +80,7 @@ async function connect() {
     return [];
   };
   for (const s of SCHEMA(false)) db.exec(s);
+  try { db.exec(`ALTER TABLE users ADD COLUMN points INTEGER NOT NULL DEFAULT 0`); } catch {} // existe déjà
   console.log("[db] SQLite local :", file);
   return makeApi(q, async (fn) => {
     db.exec("BEGIN");
@@ -94,7 +96,7 @@ async function connect() {
 }
 
 function makeApi(q, tx) {
-  const num = (r) => r && Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === "string" && /^(packs|pack_clock|id|opened|created_at|user_id|expires|count|first_at)$/.test(k) ? Number(v) : v]));
+  const num = (r) => r && Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === "string" && /^(packs|pack_clock|id|opened|created_at|user_id|expires|count|first_at|points|total)$/.test(k) ? Number(v) : v]));
   return {
     async createUser(pseudo, pass, packs, now) {
       const rows = await q(
@@ -133,6 +135,28 @@ function makeApi(q, tx) {
     },
     async collection(userId) {
       return (await q(`SELECT car_id, count, first_at FROM collection WHERE user_id = $1`, [userId])).map(num);
+    },
+    // Recycle tous les doubles en points
+    async recycle(userId, values) {
+      return tx(async (tq) => {
+        const rows = (await tq(`SELECT car_id, count FROM collection WHERE user_id = $1 AND count > 1`, [userId])).map(num);
+        let gained = 0, cards = 0;
+        for (const r of rows) { const extra = r.count - 1; cards += extra; gained += extra * (values[r.car_id] || 1); }
+        if (!rows.length) {
+          const u = await tq(`SELECT points FROM users WHERE id = $1`, [userId]);
+          return { gained: 0, cards: 0, points: Number(u[0].points) };
+        }
+        await tq(`UPDATE collection SET count = 1 WHERE user_id = $1 AND count > 1`, [userId]);
+        const u = await tq(`UPDATE users SET points = points + $2 WHERE id = $1 RETURNING points`, [userId, gained]);
+        return { gained, cards, points: Number(u[0].points) };
+      });
+    },
+    async buyPack(userId, cost) {
+      const r = await q(`UPDATE users SET points = points - $2, packs = packs + 1 WHERE id = $1 AND points >= $2 RETURNING points, packs`, [userId, cost]);
+      return r[0] ? num(r[0]) : null;
+    },
+    async allCollections() {
+      return (await q(`SELECT u.id AS user_id, u.pseudo, c.car_id FROM users u LEFT JOIN collection c ON c.user_id = u.id`)).map(num);
     },
     async imageCache() {
       const out = {};

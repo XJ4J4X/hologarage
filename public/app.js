@@ -8,27 +8,48 @@
   const PER_PAGE = 9;
   const RARITY_VAR = ["", "--r1", "--r2", "--r3", "--r4", "--r5", "--r6"];
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  };
 
   const state = {
     catalog: null, byId: {}, rarities: [], config: {},
     me: null,
     authMode: "register",
-    binder: { spread: 0, sort: localStorage.getItem("hg_sort") || "num" },
+    binder: {
+      spread: 1,
+      sort: store.get("hg_sort", "num"),
+      view: store.get("hg_view", matchMedia("(max-width: 760px)").matches ? "grid" : "book"),
+      q: "", rarity: 0, owned: "all",
+    },
     fresh: new Set(),
     opening: false,
+    pending: null, // booster ouvert côté serveur mais pas encore affiché
   };
 
   // ───────── API ─────────
   async function api(path, body) {
-    const res = await fetch(path, {
-      method: body ? "POST" : "GET",
-      headers: body ? { "Content-Type": "application/json" } : {},
-      body: body ? JSON.stringify(body) : undefined,
-      credentials: "same-origin",
-    });
+    let res;
+    try {
+      res = await fetch(path, {
+        method: body ? "POST" : "GET",
+        headers: body ? { "Content-Type": "application/json" } : {},
+        body: body ? JSON.stringify(body) : undefined,
+        credentials: "same-origin",
+      });
+    } catch {
+      throw new Error("Connexion au serveur impossible. Vérifie ta connexion et réessaie.");
+    }
     let data = {};
     try { data = await res.json(); } catch {}
-    if (!res.ok) throw Object.assign(new Error(data.error || "Erreur réseau"), { status: res.status, data });
+    if (res.status === 401 && state.me && path !== "/api/me") {
+      // session expirée : retour à l'écran de connexion
+      state.me = null;
+      state.authMode = "login";
+      setTimeout(() => { render(); toast("Ta session a expiré. Reconnecte-toi pour continuer."); }, 0);
+    }
+    if (!res.ok) throw Object.assign(new Error(data.error || "Le serveur ne répond pas. Réessaie dans un instant."), { status: res.status, data });
     return data;
   }
 
@@ -37,13 +58,28 @@
     t.textContent = msg;
     t.classList.add("is-on");
     clearTimeout(toast.t);
-    toast.t = setTimeout(() => t.classList.remove("is-on"), 3200);
+    toast.t = setTimeout(() => t.classList.remove("is-on"), 3600);
   }
 
-  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const rarityName = (r) => state.rarities.find((x) => x.id === r)?.name || "";
   const pad = (n) => String(n).padStart(3, "0");
-  const fmtNum = (n) => n.toLocaleString("fr-FR");
+  const fmtNum = (n) => Number(n).toLocaleString("fr-FR");
+  const fmtAcc = (a) => (a == null ? "—" : a.toLocaleString("fr-FR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
+  const norm = (s) => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const FLAGS = {
+    "France": "🇫🇷", "Allemagne": "🇩🇪", "Italie": "🇮🇹", "Japon": "🇯🇵", "États-Unis": "🇺🇸", "Royaume-Uni": "🇬🇧",
+    "Suède": "🇸🇪", "Corée du Sud": "🇰🇷", "Roumanie": "🇷🇴", "Espagne": "🇪🇸", "Tchéquie": "🇨🇿", "Chine": "🇨🇳",
+    "Russie": "🇷🇺", "Croatie": "🇭🇷",
+  };
+  const BODY_LABEL = {
+    city: "Citadine", hatch: "Compacte", sedan: "Berline", wagon: "Break", suv: "SUV", offroad: "Tout-terrain",
+    pickup: "Pick-up", van: "Van", coupe: "Coupé", sport: "Sportive", super: "Supercar", hyper: "Hypercar",
+    classic: "Classique", muscle: "Muscle car", roadster: "Roadster", rally: "Course / rallye",
+  };
+  const ownedCount = () => Object.keys(state.me?.collection || {}).length;
+  const doubles = () => Object.entries(state.me?.collection || {}).reduce((s, [, c]) => s + Math.max(0, c.count - 1), 0);
+  const recyclePoints = () => Object.entries(state.me?.collection || {}).reduce((s, [id, c]) => s + Math.max(0, c.count - 1) * (state.config.recycleValue?.[state.byId[id]?.rarity] || 1), 0);
 
   // ───────── Silhouettes de voitures (SVG généré) ─────────
   const BODIES = {
@@ -133,13 +169,13 @@
   // ───────── Photos : complétées depuis le navigateur si le serveur ne les a pas encore ─────────
   const IMG_KEY = "hg_img_v1";
   function photoHTML(car) {
-    return `<img class="card__photo" src="${esc(car.img.src)}" alt="${esc(car.brand + " " + car.model)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false" onerror="this.parentNode.classList.remove('has-photo');this.remove()"><span class="card__credit">© ${esc(car.img.artist)} · ${esc(car.img.license)}</span>`;
+    return `<img class="card__photo" src="${esc(car.img.src)}" alt="${esc(car.brand + " " + car.model)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false" onerror="this.parentNode.classList.remove('has-photo');this.remove()">`;
   }
   function patchCardPhotos(id) {
     const car = state.byId[id];
-    $$(`.card[data-id="${id}"]:not(.is-locked) .card__art:not(.has-photo)`).forEach((art) => {
-      art.classList.add("has-photo");
-      art.insertAdjacentHTML("beforeend", photoHTML(car));
+    $$(`.card[data-id="${id}"]:not(.is-locked) .card__media:not(.has-photo)`).forEach((media) => {
+      media.classList.add("has-photo");
+      media.insertAdjacentHTML("afterbegin", photoHTML(car));
     });
   }
   async function wikiApi(host, params) {
@@ -196,32 +232,75 @@
     }
   }
 
-  // ───────── Carte ─────────
-  function cardHTML(car, { locked = false, count = 0, isNew = false } = {}) {
+  // ───────── Carte (recto) ─────────
+  function cardHTML(car, { locked = false, count = 0, isNew = false, back = false } = {}) {
     const pips = "<i></i>".repeat(car.rarity);
-    const long = car.model.length > 13 ? " is-long" : "";
-    const photo = !locked && car.img ? photoHTML(car) : "";
+    const photo = !locked && car.img;
     const badge = isNew ? `<span class="card__badge card__badge--new">Nouvelle</span>` : count > 1 ? `<span class="card__badge">×${count}</span>` : "";
+    const modelCls = car.model.length > 16 ? " is-xlong" : car.model.length > 11 ? " is-long" : "";
+    const spec = (v, unit, label) => `<div class="spec"><b>${locked ? "?" : v}<small>${unit}</small></b><span>${label}</span></div>`;
     return `<div class="card r${car.rarity}${locked ? " is-locked" : ""}" data-id="${car.id}">
-      <div class="card__tilt"><div class="card__face">
-        <div class="card__frame">
-          <header class="card__head"><span class="card__brand">${locked ? "Non obtenue" : esc(car.brand)}</span><span class="card__pips" aria-label="${rarityName(car.rarity)}">${pips}</span></header>
-          <h3 class="card__model${long}">${locked ? "???" : esc(car.model)}</h3>
-          <div class="card__art${photo ? " has-photo" : ""}">${locked ? "" : `<span class="card__mark">${esc(car.brand)}</span>`}${carSVG(car, locked)}${photo}</div>
-          <dl class="card__stats">
-            <div><dt>Année</dt><dd>${locked ? "—" : car.year}</dd></div>
-            <div><dt>Puissance</dt><dd>${locked ? "—" : fmtNum(car.hp) + " ch"}</dd></div>
-            <div><dt>Origine</dt><dd>${locked ? "—" : esc(car.country)}</dd></div>
-          </dl>
-          <p class="card__desc">${locked ? "Trouve cette carte dans un booster pour découvrir le modèle." : esc(car.desc)}</p>
-          <footer class="card__foot"><span>#${pad(car.num)} / ${state.catalog.length}</span><b>${rarityName(car.rarity)}</b></footer>
+      <div class="card__tilt">
+        <div class="card__face card__front">
+          <div class="card__media${photo ? " has-photo" : ""}">
+            ${photo ? photoHTML(car) : ""}${carSVG(car, locked)}
+            ${locked ? `<span class="card__lock" aria-hidden="true">?</span>` : ""}
+          </div>
+          <div class="card__top">
+            <span class="card__rar"><span class="card__pips" aria-hidden="true">${pips}</span>${rarityName(car.rarity)}</span>
+            <span class="card__num">#${pad(car.num)}</span>
+          </div>
+          <div class="card__body">
+            <div class="card__title">
+              <span class="card__brand">${locked ? "Carte à découvrir" : esc(car.brand)}</span>
+              <h3 class="card__model${modelCls}">${locked ? "???" : esc(car.model)}</h3>
+            </div>
+            <div class="card__specs">
+              ${spec(fmtNum(car.hp), " ch", "Puissance")}
+              ${spec(fmtAcc(car.acc), car.acc == null ? "" : " s", "0 à 100")}
+              ${spec(car.vmax ? fmtNum(car.vmax) : "—", car.vmax ? " km/h" : "", "Vitesse max")}
+            </div>
+            <p class="card__desc">${locked ? "Ouvre des boosters pour découvrir ce modèle et sa fiche complète." : esc(car.desc)}</p>
+            <div class="card__foot">
+              <span class="card__engine">${locked ? BODY_LABEL[car.body] || "" : esc(car.engine)}</span>
+              <span class="card__origin">${locked ? "" : `${FLAGS[car.country] || ""} ${car.year}`}</span>
+            </div>
+          </div>
+          <div class="card__holo"></div><div class="card__sparkle"></div><div class="card__glare"></div>
         </div>
-        <div class="card__holo"></div><div class="card__sparkle"></div><div class="card__glare"></div>
-      </div></div>${badge}
+        ${back ? cardBackHTML(car, locked) : ""}
+      </div>${badge}
     </div>`;
   }
 
-  // Inclinaison 3D + reflets qui suivent le pointeur
+  // ───────── Carte (verso : fiche détaillée) ─────────
+  function cardBackHTML(car, locked) {
+    if (locked) {
+      return `<div class="card__face card__back"><div class="back__inner back__inner--locked">
+        <p class="back__brand">Carte n°${car.num}</p><h3 class="back__model">Pas encore obtenue</h3>
+        <p class="back__text">Cette carte ${rarityName(car.rarity).toLowerCase()} se cache dans un booster. Sa fiche complète apparaîtra ici dès que tu l'auras trouvée.</p>
+      </div></div>`;
+    }
+    const row = (k, v) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
+    return `<div class="card__face card__back"><div class="back__inner">
+      <p class="back__brand">${esc(car.brand)}</p>
+      <h3 class="back__model">${esc(car.model)}</h3>
+      <p class="back__text">${esc(car.long)}</p>
+      <dl class="back__specs">
+        ${row("Moteur", esc(car.engine))}
+        ${row("Puissance", `${fmtNum(car.hp)} ch`)}
+        ${row("0 à 100 km/h", car.acc == null ? "—" : `${fmtAcc(car.acc)} s`)}
+        ${row("Vitesse max", car.vmax ? `${fmtNum(car.vmax)} km/h` : "—")}
+        ${row("Année", car.year)}
+        ${row("Origine", `${FLAGS[car.country] || ""} ${esc(car.country)}`)}
+        ${row("Catégorie", BODY_LABEL[car.body] || "")}
+      </dl>
+      ${car.img ? `<p class="back__credit">Photo ${esc(car.img.artist)}, ${esc(car.img.license)}</p>` : ""}
+    </div><div class="card__glare"></div></div>`;
+  }
+
+
+  // ───────── Inclinaison 3D ─────────
   function tilt(el, { strength = 1, target = el } = {}) {
     let raf = 0;
     const set = (px, py, hyp) => {
@@ -270,27 +349,131 @@
     return () => (stop = true);
   }
 
+
   // ───────── Rendu général ─────────
+  const VIEWS = ["boosters", "classeur", "classement"];
+  function currentView() {
+    const h = location.hash.replace("#", "");
+    return VIEWS.includes(h) ? h : "boosters";
+  }
   function setTopbar() {
     const logged = !!state.me;
     $(".topbar").hidden = !logged;
     if (!logged) return;
     $("#who").textContent = state.me.pseudo;
-    const owned = Object.keys(state.me.collection).length;
-    $("#progress").textContent = `${owned} / ${state.catalog.length} modèles`;
+    $("#progress").textContent = `${ownedCount()} / ${state.catalog.length} modèles`;
     const view = currentView();
-    $$(".tabs a").forEach((a) => { if (a.dataset.view !== view) a.removeAttribute("aria-current"); else a.setAttribute("aria-current", "page"); });
-  }
-  function currentView() {
-    const h = location.hash.replace("#", "");
-    return h === "classeur" ? "classeur" : "boosters";
+    $$(".tabs a").forEach((a) => { if (a.dataset.view === view) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
   }
   function render() {
     clearInterval(render.timer);
     if (!state.me) return renderAuth();
     setTopbar();
-    if (currentView() === "classeur") renderBinder();
+    const v = currentView();
+    if (v === "classeur") renderBinder();
+    else if (v === "classement") renderLeaderboard();
     else renderPacks();
+  }
+
+  // ───────── Boosters ─────────
+  function garageHTML() {
+    const cfg = state.config, me = state.me;
+    const d = doubles(), pts = recyclePoints();
+    return `<div class="garage" id="garage">
+      <p class="odds-title">Points garage</p>
+      <div class="garage__points"><b>${fmtNum(me.points || 0)}</b><span>points</span></div>
+      <p class="garage__hint">${d ? `Tu as ${d} carte${d > 1 ? "s" : ""} en double. Recycle-les pour gagner ${pts} points : plus une carte est rare, plus elle rapporte.` : "Aucune carte en double pour l'instant. Les doubles pourront être recyclés en points."}</p>
+      <div class="garage__actions">
+        <button class="btn btn--small btn--light" type="button" id="recycle" ${d ? "" : "disabled"}>Recycler les doubles${d ? ` (+${pts})` : ""}</button>
+        <button class="btn btn--small" type="button" id="buy" ${(me.points || 0) >= cfg.packCost ? "" : "disabled"}>Acheter un booster (${cfg.packCost} pts)</button>
+      </div>
+    </div>`;
+  }
+  function bindGarage() {
+    $("#recycle")?.addEventListener("click", async (e) => {
+      const d = doubles();
+      if (!d || !confirmInline(e.currentTarget, `Recycler ${d} double${d > 1 ? "s" : ""} ?`)) return;
+      try {
+        const r = await api("/api/recycle", {});
+        for (const c of Object.values(state.me.collection)) c.count = 1;
+        state.me.points = r.points;
+        toast(r.gained ? `${r.cards} double${r.cards > 1 ? "s" : ""} recyclé${r.cards > 1 ? "s" : ""} : +${r.gained} points garage.` : "Aucun double à recycler.");
+        refreshGarage();
+      } catch (ex) { toast(ex.message); }
+    });
+    $("#buy")?.addEventListener("click", async () => {
+      try {
+        const r = await api("/api/packs/buy", {});
+        state.me.points = r.points;
+        state.me.packs = r.packs;
+        state.me.nextPackIn = r.nextPackIn;
+        toast("Booster acheté. Il t'attend sur le tapis.");
+        if (!state.opening) render(); else refreshGarage();
+      } catch (ex) { toast(ex.message); }
+    });
+  }
+  function refreshGarage() {
+    const g = $("#garage");
+    if (!g) return;
+    g.outerHTML = garageHTML();
+    bindGarage();
+  }
+  // Demande une confirmation par un second clic sur le même bouton
+  function confirmInline(btn, label) {
+    if (btn.dataset.confirm === "1") { delete btn.dataset.confirm; return true; }
+    const old = btn.textContent;
+    btn.dataset.confirm = "1";
+    btn.textContent = label + " Clique encore pour confirmer";
+    setTimeout(() => { if (btn.isConnected && btn.dataset.confirm) { delete btn.dataset.confirm; btn.textContent = old; } }, 4000);
+    return false;
+  }
+
+  function renderPacks() {
+    const me = state.me;
+    const cfg = state.config;
+    const deadline = me.nextPackIn != null ? Date.now() + me.nextPackIn : null;
+    const total = state.rarities.reduce((s, r) => s + r.weight, 0);
+    const every = cfg.packInterval >= 3600000 ? `${Math.round(cfg.packInterval / 3600000)} h` : `${Math.round(cfg.packInterval / 60000)} min`;
+    app.innerHTML = `<section class="page">
+      <div class="packs">
+        <div class="stage" id="stage">
+          ${me.packs > 0 ? packHTML(me.packs) : `<p class="pack-empty"><strong>Plus de booster pour l'instant</strong>De nouveaux boosters arrivent automatiquement, ou achète-en un avec tes points garage.</p>`}
+          ${me.packs > 0 ? `<button class="btn-ghost pack-auto" type="button" id="auto-open">Ouvrir sans découper</button>` : ""}
+          <div class="reveal" id="reveal"></div>
+        </div>
+        <aside class="side">
+          <div>
+            <div class="counter"><b id="pack-count">${me.packs}</b><span>${packWord(me.packs)} prêt${me.packs > 1 ? "s" : ""} à ouvrir</span></div>
+            <p class="timer" id="timer">${deadline ? `+${cfg.packsPerTick} ${packWord(cfg.packsPerTick)} dans <b>${fmtDuration(deadline - Date.now())}</b>` : `Réserve pleine (${cfg.maxPacks}) : ouvre un booster pour relancer la recharge.`}</p>
+          </div>
+          ${garageHTML()}
+          <details class="odds-box">
+            <summary>Chances par carte</summary>
+            <ul class="odds">${state.rarities.slice().reverse().map((r) => `<li style="--c:var(${RARITY_VAR[r.id]})">${r.name}<span>${(r.weight / total * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %</span></li>`).join("")}</ul>
+            <p class="odds-note">La 5ᵉ carte de chaque booster est au moins Rare. Tu reçois ${cfg.packsPerTick} ${packWord(cfg.packsPerTick)} gratuits toutes les ${every}, jusqu'à ${cfg.maxPacks} en réserve.</p>
+          </details>
+        </aside>
+      </div>
+    </section>`;
+
+    if (deadline) {
+      render.timer = setInterval(async () => {
+        const left = deadline - Date.now();
+        const t = $("#timer b");
+        if (t) t.textContent = fmtDuration(left);
+        if (left <= 0) {
+          clearInterval(render.timer);
+          state.me = await api("/api/me").catch(() => state.me);
+          if (!state.opening && currentView() === "boosters" && $("#viewer").hidden) render();
+        }
+      }, 1000);
+    }
+    bindGarage();
+    const pack = $("#pack");
+    if (pack) {
+      tilt(pack, { strength: 0.8 });
+      setupCutting(pack);
+    }
   }
 
   // ───────── Connexion / inscription ─────────
@@ -349,6 +532,7 @@
     });
   }
 
+
   // ───────── Boosters ─────────
   function fmtDuration(ms) {
     const s = Math.max(0, Math.ceil(ms / 1000));
@@ -376,52 +560,6 @@
     </div>`;
   }
   const packWord = (n) => (n > 1 ? "boosters" : "booster");
-  function renderPacks() {
-    const me = state.me;
-    const cfg = state.config;
-    const deadline = me.nextPackIn != null ? Date.now() + me.nextPackIn : null;
-    const total = state.rarities.reduce((s, r) => s + r.weight, 0);
-    const every = cfg.packInterval >= 3600000 ? `${Math.round(cfg.packInterval / 3600000)} h` : `${Math.round(cfg.packInterval / 60000)} min`;
-    app.innerHTML = `<section class="page">
-      <div class="packs">
-        <div class="stage" id="stage">
-          ${me.packs > 0 ? packHTML(me.packs) : `<p class="pack-empty"><strong>Plus de booster pour l'instant</strong>De nouveaux boosters arrivent automatiquement. Va admirer ta collection en attendant.</p>`}
-          ${me.packs > 0 ? `<button class="btn-ghost pack-auto" type="button" id="auto-open">Ouvrir sans découper</button>` : ""}
-          <div class="reveal" id="reveal"></div>
-        </div>
-        <aside class="side">
-          <div>
-            <div class="counter"><b id="pack-count">${me.packs}</b><span>${packWord(me.packs)} prêt${me.packs > 1 ? "s" : ""} à ouvrir</span></div>
-            <p class="timer" id="timer">${deadline ? `+${cfg.packsPerTick} ${packWord(cfg.packsPerTick)} dans <b>${fmtDuration(deadline - Date.now())}</b>` : `Réserve pleine (${cfg.maxPacks}) : ouvre un booster pour relancer la recharge.`}</p>
-          </div>
-          <div>
-            <p class="odds-title">Chances par carte</p>
-            <ul class="odds">${state.rarities.slice().reverse().map((r) => `<li style="--c:var(${RARITY_VAR[r.id]})">${r.name}<span>${(r.weight / total * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %</span></li>`).join("")}</ul>
-            <p class="odds-note">La 5ᵉ carte de chaque booster est au moins Rare. Tu reçois ${cfg.packsPerTick} ${packWord(cfg.packsPerTick)} gratuits toutes les ${every}, jusqu'à ${cfg.maxPacks} en réserve.</p>
-          </div>
-        </aside>
-      </div>
-    </section>`;
-
-    if (deadline) {
-      render.timer = setInterval(async () => {
-        const left = deadline - Date.now();
-        const t = $("#timer b");
-        if (t) t.textContent = fmtDuration(left);
-        if (left <= 0) {
-          clearInterval(render.timer);
-          state.me = await api("/api/me").catch(() => state.me);
-          if (!state.opening) render();
-        }
-      }, 1000);
-    }
-    const pack = $("#pack");
-    if (pack) {
-      tilt(pack, { strength: 0.8 });
-      setupCutting(pack);
-    }
-  }
-
   // ───────── Découpe du booster à la souris / au doigt ─────────
   function setupCutting(pack) {
     let cut = 0, dragging = false, finished = false, request = null, lastFlake = 0;
@@ -502,34 +640,48 @@
   async function fetchPack() {
     state.opening = true;
     try {
-      return await api("/api/packs/open", {});
+      const r = await api("/api/packs/open", {});
+      state.pending = r;
+      return r;
     } catch (e) {
       state.opening = false;
       toast(e.message);
-      state.me = await api("/api/me").catch(() => state.me);
-      render();
+      if (state.me) {
+        state.me = await api("/api/me").catch(() => state.me);
+        render();
+      }
       return null;
     }
   }
 
-  function revealPack(pack, result) {
-    clearInterval(render.timer);
-    // mise à jour locale de la collection
-    const before = new Set(Object.keys(state.me.collection));
+  // Range les cartes reçues dans la collection locale (une seule fois par booster)
+  function applyResult(result) {
+    if (!result || result.applied) return new Set();
+    result.applied = true;
+    if (state.pending === result) state.pending = null;
     const newOnes = new Set();
     for (const id of result.cards) {
       const c = state.me.collection[id];
       if (c) c.count++;
-      else { state.me.collection[id] = { count: 1, first: Date.now() }; if (!before.has(id)) newOnes.add(id); }
+      else { state.me.collection[id] = { count: 1, first: Date.now() }; newOnes.add(id); }
     }
     newOnes.forEach((id) => state.fresh.add(id));
     state.me.packs = result.packs;
     state.me.nextPackIn = result.nextPackIn;
     state.me.opened++;
     setTopbar();
+    return newOnes;
+  }
+
+  function revealPack(pack, result) {
+    clearInterval(render.timer);
+    if (!pack.isConnected) { applyResult(result); return; }
+    const newOnes = applyResult(result);
     $("#pack-count").textContent = result.packs;
+    refreshGarage();
 
     pack.classList.add("is-gone");
+    $(".packs")?.classList.add("is-revealing");
     const reveal = $("#reveal");
     const cards = result.cards.map((id) => state.byId[id]);
     reveal.innerHTML = `<div class="reveal__row">` + cards.map((car, i) => `<button class="flip${car.rarity >= 4 ? " is-hot" : ""}" type="button" style="--i:${i};--hc:var(${RARITY_VAR[car.rarity]})" data-id="${car.id}" aria-label="Retourner la carte ${i + 1}">
@@ -544,96 +696,173 @@
     requestAnimationFrame(() => requestAnimationFrame(() => reveal.classList.add("is-live")));
 
     const flips = $$(".flip", reveal);
+    let finished = false;
     const done = () => {
-      if (flips.every((f) => f.classList.contains("is-flipped"))) {
-        const best = cards.reduce((a, c) => (c.rarity > a.rarity ? c : a), cards[0]);
-        $("#reveal-actions").innerHTML = `
-          ${state.me.packs > 0 ? `<button class="btn" type="button" id="again">Ouvrir le booster suivant</button>` : ""}
-          <button class="btn btn--light" type="button" id="to-binder">Voir dans le classeur</button>`;
-        $("#again")?.addEventListener("click", () => { state.opening = false; render(); });
-        $("#to-binder").addEventListener("click", () => { state.opening = false; goToCard(best.id); });
-      }
+      if (finished || !flips.every((f) => f.classList.contains("is-flipped"))) return;
+      finished = true;
+      const best = cards.reduce((a, c) => (c.rarity > a.rarity ? c : a), cards[0]);
+      const fresh = cards.filter((c) => newOnes.has(c.id)).length;
+      $("#reveal-actions").innerHTML = `
+        <p class="reveal-sum">${fresh ? `${fresh} nouvelle${fresh > 1 ? "s" : ""} carte${fresh > 1 ? "s" : ""} pour ta collection` : "Que des doubles cette fois : recycle-les en points garage"}</p>
+        ${state.me.packs > 0 ? `<button class="btn" type="button" id="again">Ouvrir le booster suivant</button>` : ""}
+        <button class="btn btn--light" type="button" id="to-binder">Voir dans le classeur</button>`;
+      $("#again")?.addEventListener("click", () => { state.opening = false; render(); });
+      $("#to-binder").addEventListener("click", () => { state.opening = false; goToCard(best.id); });
+      state.opening = false;
+    };
+    const flipOne = (f) => {
+      if (f.classList.contains("is-flipped")) return;
+      f.classList.add("is-flipped");
+      f.classList.remove("is-hot");
+      f.setAttribute("aria-label", "Voir la carte en grand");
+      done();
     };
     flips.forEach((f) => {
       const card = $(".card", f);
       tilt(f, { target: card, strength: 0.7 });
       f.addEventListener("click", () => {
-        if (!f.classList.contains("is-flipped")) { f.classList.add("is-flipped"); f.classList.remove("is-hot"); done(); }
+        if (!f.classList.contains("is-flipped")) flipOne(f);
         else openViewer(f.dataset.id, cards.map((c) => c.id));
       });
     });
-    $("#reveal-all").addEventListener("click", () => {
-      flips.forEach((f, i) => setTimeout(() => { f.classList.add("is-flipped"); f.classList.remove("is-hot"); if (i === flips.length - 1) done(); }, i * 160));
+    $("#reveal-all").addEventListener("click", (e) => {
+      e.currentTarget.disabled = true;
+      flips.forEach((f, i) => setTimeout(() => flipOne(f), i * 160));
     });
   }
 
-  // ───────── Classeur 3D ─────────
-  function sortedCars() {
-    const list = state.catalog.slice();
-    const s = state.binder.sort;
-    if (s === "rarity") list.sort((a, b) => b.rarity - a.rarity || a.num - b.num);
-    else if (s === "brand") list.sort((a, b) => a.brand.localeCompare(b.brand, "fr") || a.year - b.year);
-    else if (s === "year") list.sort((a, b) => a.year - b.year || a.num - b.num);
+  // ───────── Classeur ─────────
+  function filteredCars() {
+    const b = state.binder, col = state.me.collection;
+    let list = state.catalog.slice();
+    const q = norm(b.q.trim());
+    if (q) list = list.filter((c) => col[c.id] ? norm(`${c.brand} ${c.model} ${c.year} ${c.country}`).includes(q) : norm(`${c.num}`).includes(q));
+    if (b.rarity) list = list.filter((c) => c.rarity === b.rarity);
+    if (b.owned === "mine") list = list.filter((c) => col[c.id]);
+    else if (b.owned === "missing") list = list.filter((c) => !col[c.id]);
+    else if (b.owned === "doubles") list = list.filter((c) => col[c.id]?.count > 1);
+    const s = b.sort;
+    if (s === "rarity") list.sort((a, c) => c.rarity - a.rarity || a.num - c.num);
+    else if (s === "brand") list.sort((a, c) => a.brand.localeCompare(c.brand, "fr") || a.year - c.year);
+    else if (s === "year") list.sort((a, c) => a.year - c.year || a.num - c.num);
+    else if (s === "hp") list.sort((a, c) => c.hp - a.hp);
+    else if (s === "recent") list.sort((a, c) => (col[c.id]?.first || 0) - (col[a.id]?.first || 0) || a.num - c.num);
     return list;
   }
   function goToCard(id) {
-    const idx = sortedCars().findIndex((c) => c.id === id);
-    const page = Math.floor(idx / PER_PAGE) + 1; // pages numérotées à partir de 1
-    // page impaire = verso (gauche) de la feuille (page-1)/2 → planche (page+1)/2 ; page paire = recto de la feuille page/2 → planche page/2
-    state.binder.spread = page % 2 ? (page + 1) / 2 : page / 2;
-    state.binder.highlight = id;
+    const b = state.binder;
+    b.q = ""; b.rarity = 0; b.owned = "all";
+    const idx = filteredCars().findIndex((c) => c.id === id);
+    const page = Math.floor(idx / PER_PAGE) + 1;
+    // page impaire = verso de la feuille précédente (planche (page+1)/2), page paire = recto (planche page/2)
+    b.spread = page % 2 ? (page + 1) / 2 : page / 2;
+    b.highlight = id;
     if (location.hash !== "#classeur") location.hash = "#classeur";
     else render();
   }
 
+  function binderToolbar() {
+    const b = state.binder;
+    const sorts = [["num", "Ordre du catalogue"], ["rarity", "Rareté"], ["brand", "Marque"], ["year", "Année"], ["hp", "Puissance"], ["recent", "Dernières obtenues"]];
+    const owned = [["all", "Toutes les cartes"], ["mine", "Mes cartes"], ["missing", "Cartes manquantes"], ["doubles", "Mes doubles"]];
+    return `<div class="toolbar" role="search">
+      <input class="input" type="search" id="f-q" placeholder="Chercher une marque, un modèle…" value="${esc(b.q)}" aria-label="Rechercher une carte">
+      <select class="select" id="f-owned" aria-label="Cartes affichées">${owned.map(([v, l]) => `<option value="${v}"${b.owned === v ? " selected" : ""}>${l}</option>`).join("")}</select>
+      <select class="select" id="f-rarity" aria-label="Rareté"><option value="0">Toutes les raretés</option>${state.rarities.map((r) => `<option value="${r.id}"${b.rarity === r.id ? " selected" : ""}>${r.name}</option>`).join("")}</select>
+      <select class="select" id="f-sort" aria-label="Trier par">${sorts.map(([v, l]) => `<option value="${v}"${b.sort === v ? " selected" : ""}>Tri : ${l}</option>`).join("")}</select>
+      <div class="seg seg--small" role="group" aria-label="Affichage">
+        <button type="button" data-v="book" aria-pressed="${b.view === "book"}">Classeur 3D</button>
+        <button type="button" data-v="grid" aria-pressed="${b.view === "grid"}">Grille</button>
+      </div>
+    </div>`;
+  }
+
   function renderBinder() {
     const me = state.me;
-    const list = sortedCars();
-    const pages = Math.ceil(list.length / PER_PAGE);
-    const leaves = Math.ceil((pages + 1) / 2); // feuille 0 : couverture au recto, page 1 au verso
-    const spreads = leaves; // planche k : feuilles < k tournées
     const b = state.binder;
-    b.spread = Math.max(0, Math.min(spreads, b.spread));
-    const owned = Object.keys(me.collection).length;
+    const owned = ownedCount();
     const counts = state.rarities.map((r) => {
       const all = state.catalog.filter((c) => c.rarity === r.id);
       return { r, have: all.filter((c) => me.collection[c.id]).length, all: all.length };
     });
+    app.innerHTML = `<section class="page">
+      <div class="binder-head">
+        <div>
+          <h1 class="page__title">Mon classeur</h1>
+          <p class="page__sub">${owned} modèles sur ${state.catalog.length}, ${me.opened} booster${me.opened > 1 ? "s" : ""} ouvert${me.opened > 1 ? "s" : ""}, ${doubles()} double${doubles() > 1 ? "s" : ""}</p>
+          <div class="progressbar" aria-hidden="true"><i style="width:${(owned / state.catalog.length) * 100}%"></i></div>
+        </div>
+        <div class="chips">${counts.map(({ r, have, all }) => `<button type="button" class="chip${b.rarity === r.id ? " is-on" : ""}" data-r="${r.id}" style="--c:var(${RARITY_VAR[r.id]})"><b>${have}/${all}</b> ${r.name}</button>`).join("")}</div>
+      </div>
+      ${binderToolbar()}
+      <div id="binder-body"></div>
+    </section>`;
+
+    const refresh = () => { b.spread = 1; renderBinderBody(); };
+    let qTimer;
+    $("#f-q").addEventListener("input", (e) => { clearTimeout(qTimer); qTimer = setTimeout(() => { b.q = e.target.value; refresh(); }, 180); });
+    $("#f-owned").addEventListener("change", (e) => { b.owned = e.target.value; refresh(); });
+    $("#f-rarity").addEventListener("change", (e) => { b.rarity = Number(e.target.value); syncChips(); refresh(); });
+    $("#f-sort").addEventListener("change", (e) => { b.sort = e.target.value; store.set("hg_sort", b.sort); refresh(); });
+    $$(".seg--small button").forEach((btn) => btn.addEventListener("click", () => {
+      b.view = btn.dataset.v; store.set("hg_view", b.view);
+      $$(".seg--small button").forEach((x) => x.setAttribute("aria-pressed", x === btn));
+      renderBinderBody();
+    }));
+    const syncChips = () => { $$(".chip[data-r]").forEach((c) => c.classList.toggle("is-on", Number(c.dataset.r) === b.rarity)); $("#f-rarity").value = String(b.rarity); };
+    $$(".chip[data-r]").forEach((c) => c.addEventListener("click", () => {
+      const r = Number(c.dataset.r);
+      b.rarity = b.rarity === r ? 0 : r;
+      syncChips(); refresh();
+    }));
+    renderBinderBody();
+  }
+
+  function slotHTML(car) {
+    const own = state.me.collection[car.id];
+    return `<button class="slot" type="button" data-id="${car.id}" aria-label="${own ? esc(car.brand + " " + car.model) : "Carte non obtenue n°" + car.num}">${cardHTML(car, { locked: !own, count: own?.count || 0, isNew: state.fresh.has(car.id) })}</button>`;
+  }
+
+  function renderBinderBody() {
+    const body = $("#binder-body");
+    const list = filteredCars();
+    const b = state.binder;
+    if (!list.length) {
+      body.innerHTML = `<div class="empty"><strong>Aucune carte ne correspond.</strong>Change la recherche ou les filtres pour voir d'autres cartes.</div>`;
+      return;
+    }
+    const order = list.map((c) => c.id);
+    if (b.view === "grid") {
+      body.innerHTML = `<p class="result-count">${list.length} carte${list.length > 1 ? "s" : ""}</p><div class="grid">${list.map(slotHTML).join("")}</div>`;
+      $$(".slot[data-id]", body).forEach((s) => s.addEventListener("click", () => openViewer(s.dataset.id, order)));
+      highlight(body);
+      return;
+    }
+
+    const pages = Math.ceil(list.length / PER_PAGE);
+    const leaves = Math.ceil((pages + 1) / 2); // feuille 0 : couverture au recto, page 1 au verso
+    const spreads = leaves;
+    b.spread = Math.max(0, Math.min(spreads, b.spread));
+    const owned = ownedCount();
 
     const pageHTML = (n) => {
       if (n > pages) return `<div class="inside">${owned === state.catalog.length ? "Collection complète. Chapeau !" : `Encore ${state.catalog.length - owned} cartes à trouver.`}</div>`;
       const slice = list.slice((n - 1) * PER_PAGE, n * PER_PAGE);
-      const slots = slice.map((car) => {
-        const own = me.collection[car.id];
-        return `<button class="slot" type="button" data-id="${car.id}" aria-label="${own ? esc(car.brand + " " + car.model) : "Carte non obtenue n°" + car.num}">${cardHTML(car, { locked: !own, count: own?.count || 0, isNew: state.fresh.has(car.id) })}</button>`;
-      }).join("") + `<div class="slot slot--empty"></div>`.repeat(PER_PAGE - slice.length);
-      const have = slice.filter((c) => me.collection[c.id]).length;
+      const slots = slice.map(slotHTML).join("") + `<div class="slot slot--empty"></div>`.repeat(PER_PAGE - slice.length);
+      const have = slice.filter((c) => state.me.collection[c.id]).length;
       return `<div class="sheet__grid">${slots}</div><div class="sheet__foot"><span>Page ${n}</span><span>${have} / ${slice.length}</span></div>`;
     };
 
     let leavesHTML = "";
     for (let i = 0; i < leaves; i++) {
       const front = i === 0
-        ? `<div class="leaf__side cover"><h2 class="cover__title">Holo<span>Garage</span></h2><div class="cover__owner">Classeur de<b>${esc(me.pseudo)}</b>${owned} / ${state.catalog.length} cartes</div><button class="btn" type="button" data-open>Ouvrir le classeur</button></div>`
+        ? `<div class="leaf__side cover"><h2 class="cover__title">Holo<span>Garage</span></h2><div class="cover__owner">Classeur de<b>${esc(state.me.pseudo)}</b>${owned} / ${state.catalog.length} cartes</div><button class="btn" type="button" data-open>Ouvrir le classeur</button></div>`
         : `<div class="leaf__side sheet">${pageHTML(i * 2)}</div>`;
       const back = `<div class="leaf__side leaf__side--back sheet">${pageHTML(i * 2 + 1)}</div>`;
       leavesHTML += `<div class="leaf${i < b.spread ? " is-flipped" : ""}" data-leaf="${i}" style="--z:${i < b.spread ? i + 1 : leaves - i}">${front}${back}</div>`;
     }
 
-    const sorts = [["num", "Ordre du catalogue"], ["rarity", "Rareté"], ["brand", "Marque"], ["year", "Année"]];
-    app.innerHTML = `<section class="page">
-      <div class="binder-head">
-        <div>
-          <h1 class="page__title">Mon classeur</h1>
-          <p class="page__sub">${owned} modèles sur ${state.catalog.length} · ${me.opened} booster${me.opened > 1 ? "s" : ""} ouvert${me.opened > 1 ? "s" : ""}</p>
-          <div class="progressbar" aria-hidden="true"><i style="width:${(owned / state.catalog.length) * 100}%"></i></div>
-        </div>
-        <div style="display:grid;gap:12px;justify-items:end">
-          <div class="chips">${counts.map(({ r, have, all }) => `<span class="chip" style="--c:var(${RARITY_VAR[r.id]})"><b>${have}/${all}</b> ${r.name}</span>`).join("")}</div>
-          <label>Trier par <select class="select" id="sort">${sorts.map(([v, l]) => `<option value="${v}"${b.sort === v ? " selected" : ""}>${l}</option>`).join("")}</select></label>
-        </div>
-      </div>
-      <div class="book-wrap">
+    body.innerHTML = `<div class="book-wrap">
         <div class="book" id="book">
           <div class="book__board book__board--l"></div>
           <div class="book__board book__board--r"></div>
@@ -645,8 +874,7 @@
         <button class="round" type="button" id="prev" aria-label="Page précédente">‹</button>
         <span class="book-nav__where" id="where"></span>
         <button class="round" type="button" id="next" aria-label="Page suivante">›</button>
-      </div>
-    </section>`;
+      </div>`;
 
     const book = $("#book");
     const leafEls = $$(".leaf", book);
@@ -656,7 +884,7 @@
       $("#prev").disabled = b.spread === 0;
       $("#next").disabled = b.spread === spreads;
       const l = b.spread * 2 - 1, r = b.spread * 2;
-      $("#where").textContent = b.spread === 0 ? "Couverture" : r > pages ? `Page ${l} sur ${pages}` : `Pages ${l}–${r} sur ${pages}`;
+      $("#where").textContent = b.spread === 0 ? "Couverture" : r > pages ? `Page ${l} sur ${pages}` : `Pages ${l} et ${r} sur ${pages}`;
     };
     const go = (k) => {
       k = Math.max(0, Math.min(spreads, k));
@@ -667,13 +895,14 @@
       leafEls.forEach((leaf, i) => {
         const should = i < k;
         if (should !== leaf.classList.contains("is-flipped")) {
+          clearTimeout(leaf._t);
           leaf.classList.add("is-turning");
           leaf.style.zIndex = 999 - Math.abs(i - (forward ? from : k));
           leaf.classList.toggle("is-flipped", should);
-          setTimeout(() => {
+          leaf._t = setTimeout(() => {
             leaf.classList.remove("is-turning");
             leaf.style.zIndex = "";
-            leaf.style.setProperty("--z", should ? i + 1 : leaves - i);
+            leaf.style.setProperty("--z", leaf.classList.contains("is-flipped") ? i + 1 : leaves - i);
           }, 1000);
         }
       });
@@ -683,15 +912,15 @@
     $("#prev").addEventListener("click", () => go(b.spread - 1));
     $("#next").addEventListener("click", () => go(b.spread + 1));
     $("[data-open]", book)?.addEventListener("click", (e) => { e.stopPropagation(); go(1); });
-    $("#sort").addEventListener("change", (e) => { b.sort = e.target.value; localStorage.setItem("hg_sort", b.sort); b.spread = Math.min(b.spread, 1) || 1; renderBinder(); });
+    book._go = go;
 
-    // glisser pour tourner les pages (mobile)
-    let sx = null;
-    book.addEventListener("pointerdown", (e) => { sx = e.clientX; });
+    // glisser pour tourner les pages
+    let sx = null, sy = null;
+    book.addEventListener("pointerdown", (e) => { sx = e.clientX; sy = e.clientY; });
     book.addEventListener("pointerup", (e) => {
       if (sx == null) return;
-      const dx = e.clientX - sx; sx = null;
-      if (Math.abs(dx) > 60) { book.dataset.swiped = "1"; go(b.spread + (dx < 0 ? 1 : -1)); setTimeout(() => delete book.dataset.swiped, 50); }
+      const dx = e.clientX - sx, dy = e.clientY - sy; sx = null;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) { book.dataset.swiped = "1"; go(b.spread + (dx < 0 ? 1 : -1)); setTimeout(() => delete book.dataset.swiped, 50); }
     });
 
     $$(".slot[data-id]", book).forEach((s) => {
@@ -701,18 +930,56 @@
         card.style.setProperty("--px", ((e.clientX - r.left) / r.width).toFixed(3));
         card.style.setProperty("--py", ((e.clientY - r.top) / r.height).toFixed(3));
       });
-      s.addEventListener("click", () => { if (!book.dataset.swiped) openViewer(s.dataset.id, list.map((c) => c.id)); });
+      s.addEventListener("click", () => { if (!book.dataset.swiped) openViewer(s.dataset.id, order); });
     });
+    highlight(book);
+  }
+  function highlight(root) {
+    const b = state.binder;
+    if (!b.highlight) return;
+    const el = $(`.slot[data-id="${b.highlight}"] .card`, root);
+    b.highlight = null;
+    if (!el) return;
+    if (b.view === "grid") el.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+    el.animate([{ transform: "scale(1)" }, { transform: "scale(1.12)" }, { transform: "scale(1)" }], { duration: 900, delay: 400, easing: "ease-out" });
+  }
 
-    if (b.highlight) {
-      const el = $(`.slot[data-id="${b.highlight}"] .card`, book);
-      b.highlight = null;
-      if (el) el.animate([{ transform: "scale(1)" }, { transform: "scale(1.12)" }, { transform: "scale(1)" }], { duration: 900, delay: 400, easing: "ease-out" });
-    }
+  // ───────── Classement ─────────
+  async function renderLeaderboard() {
+    app.innerHTML = `<section class="page"><h1 class="page__title">Classement</h1><p class="page__sub">Chargement…</p></section>`;
+    let data;
+    try { data = await api("/api/leaderboard"); }
+    catch (e) { app.innerHTML = `<section class="page"><h1 class="page__title">Classement</h1><p class="page__sub">${esc(e.message)}</p></section>`; return; }
+    if (currentView() !== "classement") return;
+    const me = state.me.pseudo;
+    const total = state.catalog.length;
+    const row = (u) => `<tr class="${u.pseudo === me ? "is-me" : ""}">
+        <td class="lb__rank">${u.rank <= 3 ? ["", "🥇", "🥈", "🥉"][u.rank] : u.rank}</td>
+        <td class="lb__name">${esc(u.pseudo)}${u.pseudo === me ? " <small>(toi)</small>" : ""}</td>
+        <td><div class="lb__bar"><i style="width:${(u.cards / total) * 100}%"></i></div>${u.cards} / ${total}</td>
+        <td class="lb__score">${fmtNum(u.score)}</td>
+        <td>${u.best ? `<span class="lb__best" style="--c:var(${RARITY_VAR[u.best]})">${rarityName(u.best)}</span>` : "—"}</td>
+      </tr>`;
+    const inTop = data.top.some((u) => u.pseudo === me);
+    app.innerHTML = `<section class="page">
+      <div class="binder-head">
+        <div>
+          <h1 class="page__title">Classement</h1>
+          <p class="page__sub">${data.players} collectionneur${data.players > 1 ? "s" : ""}. Classés par nombre de modèles différents, puis par score de rareté.</p>
+        </div>
+        ${data.me ? `<div class="lb__mine"><b>${data.me.rank}<sup>${data.me.rank === 1 ? "er" : "e"}</sup></b><span>ta place</span></div>` : ""}
+      </div>
+      <div class="lb-wrap"><table class="lb">
+        <thead><tr><th>Rang</th><th>Joueur</th><th>Collection</th><th>Score</th><th>Plus rare</th></tr></thead>
+        <tbody>${data.top.map(row).join("")}${!inTop && data.me ? `<tr class="lb__gap"><td colspan="5">…</td></tr>${row(data.me)}` : ""}</tbody>
+      </table></div>
+      <p class="odds-note">Le score additionne la valeur de chaque modèle différent : 1 point pour une Commune, jusqu'à 80 pour une Mythique.</p>
+    </section>`;
   }
 
   // ───────── Visionneuse ─────────
   let stopSway = () => {};
+  let viewerOrder = [];
   function openViewer(id, order) {
     const v = $("#viewer");
     const car = state.byId[id];
@@ -721,30 +988,43 @@
     const prev = order[idx - 1], next = order[idx + 1];
     stopSway();
     const firstSeen = own ? new Date(own.first).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" }) : null;
+    const facts = [["Moteur", esc(car.engine)], ["Puissance", `${fmtNum(car.hp)} ch`], ["0 à 100 km/h", car.acc == null ? "—" : `${fmtAcc(car.acc)} s`], ["Vitesse max", car.vmax ? `${fmtNum(car.vmax)} km/h` : "—"], ["Année", car.year], ["Origine", `${FLAGS[car.country] || ""} ${esc(car.country)}`]];
     v.innerHTML = `<button class="round viewer__close" type="button" id="v-close" aria-label="Fermer">✕</button>
       <div class="viewer__box">
-        ${cardHTML(car, { locked: !own })}
+        <div class="viewer__cardcol">
+          ${cardHTML(car, { locked: !own, back: true })}
+          <button class="btn-ghost" type="button" id="v-flip">Retourner la carte</button>
+        </div>
         <div class="viewer__info">
           ${own ? `<p class="viewer__brand">${esc(car.brand)}</p><h2 id="viewer-title">${esc(car.model)}</h2>` : `<p class="viewer__brand">Carte n°${car.num}</p><h2 id="viewer-title">Non obtenue</h2>`}
-          <div class="viewer__rarity" style="--c:var(${RARITY_VAR[car.rarity]})">${rarityName(car.rarity)}</div>
-          ${own ? `<p class="viewer__desc">${esc(car.desc)}</p>
-          <dl class="viewer__facts"><div><dt>Année</dt><dd>${car.year}</dd></div><div><dt>Puissance</dt><dd>${fmtNum(car.hp)} ch</dd></div><div><dt>Origine</dt><dd>${esc(car.country)}</dd></div></dl>
+          <div class="viewer__rarity" style="--c:var(${RARITY_VAR[car.rarity]})">${rarityName(car.rarity)}<span>${BODY_LABEL[car.body] || ""}</span></div>
+          ${own ? `<p class="viewer__desc">${esc(car.long)}</p>
+          <dl class="viewer__facts">${facts.map(([k, val]) => `<div><dt>${k}</dt><dd>${val}</dd></div>`).join("")}</dl>
           ${car.img ? `<p class="viewer__credit">Photo : <a href="${esc(car.img.page)}" target="_blank" rel="noopener">${esc(car.img.artist)}</a>, ${esc(car.img.license)}, via Wikimedia Commons</p>` : ""}
           <p class="viewer__owned">${own.count > 1 ? `Tu possèdes ${own.count} exemplaires.` : "Tu possèdes 1 exemplaire."} Obtenue le ${firstSeen}.</p>`
-          : `<p class="viewer__desc">Cette carte t'attend dans un booster. Plus elle est rare, plus elle brille.</p>`}
+          : `<p class="viewer__desc">Cette carte ${rarityName(car.rarity).toLowerCase()} t'attend dans un booster. Sa fiche complète, avec photo, moteur et performances, se débloquera dès que tu l'auras trouvée.</p>
+          <dl class="viewer__facts"><div><dt>Catégorie</dt><dd>${BODY_LABEL[car.body] || "—"}</dd></div><div><dt>Puissance</dt><dd>${fmtNum(car.hp)} ch</dd></div></dl>`}
           <div class="viewer__nav">
             <button class="round" type="button" id="v-prev" aria-label="Carte précédente" ${prev ? "" : "disabled"}>‹</button>
+            <span class="viewer__pos">${idx + 1} / ${order.length}</span>
             <button class="round" type="button" id="v-next" aria-label="Carte suivante" ${next ? "" : "disabled"}>›</button>
           </div>
         </div>
       </div>`;
+    const wasHidden = v.hidden;
     v.hidden = false;
     document.body.style.overflow = "hidden";
     const card = $(".card", v);
     tilt(card);
     stopSway = idleSway(card);
+    const flip = () => {
+      card.classList.toggle("is-flipped");
+      $("#v-flip").textContent = card.classList.contains("is-flipped") ? "Voir le recto" : "Retourner la carte";
+    };
+    card.addEventListener("click", flip);
+    $("#v-flip").onclick = flip;
     state.fresh.delete(id);
-    $("#v-close").focus({ preventScroll: true });
+    if (wasHidden) $("#v-close").focus({ preventScroll: true });
     $("#v-close").onclick = closeViewer;
     $("#v-prev").onclick = () => prev && openViewer(prev, order);
     $("#v-next").onclick = () => next && openViewer(next, order);
@@ -752,7 +1032,6 @@
     v.dataset.prev = prev || ""; v.dataset.next = next || "";
     viewerOrder = order;
   }
-  let viewerOrder = [];
   function closeViewer() {
     const v = $("#viewer");
     if (v.hidden) return;
@@ -760,18 +1039,17 @@
     v.hidden = true;
     v.innerHTML = "";
     document.body.style.overflow = "";
-    // rafraîchit les badges « Nouvelle » du classeur
-    if (currentView() === "classeur" && !state.opening) {
-      $$(".slot[data-id]").forEach((s) => { if (!state.fresh.has(s.dataset.id)) $(".card__badge--new", s)?.remove(); });
-    }
+    // retire les badges « Nouvelle » des cartes déjà vues
+    $$(".slot[data-id]").forEach((s) => { if (!state.fresh.has(s.dataset.id)) $(".card__badge--new", s)?.remove(); });
   }
 
   document.addEventListener("keydown", (e) => {
     const v = $("#viewer");
     if (!v.hidden) {
       if (e.key === "Escape") closeViewer();
-      if (e.key === "ArrowLeft" && v.dataset.prev) openViewer(v.dataset.prev, viewerOrder);
-      if (e.key === "ArrowRight" && v.dataset.next) openViewer(v.dataset.next, viewerOrder);
+      else if (e.key === "ArrowLeft" && v.dataset.prev) openViewer(v.dataset.prev, viewerOrder);
+      else if (e.key === "ArrowRight" && v.dataset.next) openViewer(v.dataset.next, viewerOrder);
+      else if ((e.key === "f" || e.key === " ") && document.activeElement?.id !== "v-flip") { e.preventDefault(); $("#v-flip")?.click(); }
       return;
     }
     if (currentView() === "classeur" && state.me && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) {
@@ -780,13 +1058,28 @@
     }
   });
 
-  window.addEventListener("hashchange", () => { state.opening = false; closeViewer(); render(); window.scrollTo(0, 0); });
+  window.addEventListener("hashchange", () => {
+    if (state.pending) applyResult(state.pending); // booster découpé mais quitté avant l'affichage
+    state.opening = false;
+    closeViewer();
+    render();
+    window.scrollTo(0, 0);
+  });
   $("#logout").addEventListener("click", async () => {
     await api("/api/logout", {}).catch(() => {});
     state.me = null;
     state.authMode = "login";
+    state.fresh.clear();
     history.replaceState(null, "", location.pathname);
     render();
+  });
+  // Au retour sur l'onglet, on met à jour boosters et points
+  document.addEventListener("visibilitychange", async () => {
+    if (document.hidden || !state.me || state.opening) return;
+    const me = await api("/api/me").catch(() => null);
+    if (!me || state.opening) return;
+    state.me = me;
+    if (currentView() === "boosters" && $("#viewer").hidden) render(); else setTopbar();
   });
 
   // ───────── Démarrage ─────────
