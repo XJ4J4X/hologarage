@@ -1,4 +1,4 @@
-# HoloGarage
+# ApexPack
 
 Jeu de cartes à collectionner de voitures : 191 modèles avec de vraies photos (Wikimedia Commons, licences libres, auteur crédité), 6 niveaux de rareté, cartes holographiques en 3D, boosters à découper à la souris et classeur 3D aux pages qui se tournent. Comptes avec pseudo et mot de passe.
 

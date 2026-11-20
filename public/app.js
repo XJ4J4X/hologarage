@@ -1,4 +1,4 @@
-/* HoloGarage — front */
+/* ApexPack — front */
 (() => {
   "use strict";
 
@@ -144,10 +144,10 @@
     const id = `g${++svgSeq}`;
     const col = carColor(car);
     const front = p[p.length - 2];
-    const wheel = (x) => `<circle cx="${x}" cy="${cy}" r="${r}" fill="${locked ? "#1b2538" : "#12161d"}"/>` +
+    const wheel = (x) => `<circle cx="${x}" cy="${cy}" r="${r}" fill="${locked ? "#141417" : "#12161d"}"/>` +
       (locked ? "" : `<circle cx="${x}" cy="${cy}" r="${r * 0.58}" fill="url(#${id}m)"/><circle cx="${x}" cy="${cy}" r="${r * 0.16}" fill="#1a1f28"/>`);
     if (locked) {
-      return `<svg class="${cls}" viewBox="0 0 240 92" aria-hidden="true"><path d="${d}" fill="#1b2538" stroke="#34405a" stroke-width="1.5"/>${wheel(xr)}${wheel(xf)}</svg>`;
+      return `<svg class="${cls}" viewBox="0 0 240 92" aria-hidden="true"><path d="${d}" fill="#18181c" stroke="#33333a" stroke-width="1.2"/>${wheel(xr)}${wheel(xf)}</svg>`;
     }
     return `<svg class="${cls}" viewBox="0 0 240 92" aria-hidden="true">
       <defs>
@@ -238,7 +238,7 @@
     const photo = !locked && car.img;
     const badge = isNew ? `<span class="card__badge card__badge--new">Nouvelle</span>` : count > 1 ? `<span class="card__badge">×${count}</span>` : "";
     const modelCls = car.model.length > 16 ? " is-xlong" : car.model.length > 11 ? " is-long" : "";
-    const spec = (v, unit, label) => `<div class="spec"><b>${locked ? "?" : v}<small>${unit}</small></b><span>${label}</span></div>`;
+    const spec = (v, unit, label) => `<div class="spec"><b>${locked ? "?" : v}${unit && !locked ? `<small>${unit}</small>` : ""}</b><span>${label}</span></div>`;
     return `<div class="card r${car.rarity}${locked ? " is-locked" : ""}" data-id="${car.id}">
       <div class="card__tilt">
         <div class="card__face card__front">
@@ -248,22 +248,17 @@
           </div>
           <div class="card__top">
             <span class="card__rar"><span class="card__pips" aria-hidden="true">${pips}</span>${rarityName(car.rarity)}</span>
-            <span class="card__num">#${pad(car.num)}</span>
+            <span class="card__num">${pad(car.num)}</span>
           </div>
-          <div class="card__body">
+          <div class="card__panel">
             <div class="card__title">
-              <span class="card__brand">${locked ? "Carte à découvrir" : esc(car.brand)}</span>
+              <span class="card__brand">${locked ? "À découvrir" : esc(car.brand)}${locked ? "" : `<em>${FLAGS[car.country] || ""} ${car.year}</em>`}</span>
               <h3 class="card__model${modelCls}">${locked ? "???" : esc(car.model)}</h3>
             </div>
             <div class="card__specs">
-              ${spec(fmtNum(car.hp), " ch", "Puissance")}
-              ${spec(fmtAcc(car.acc), car.acc == null ? "" : " s", "0 à 100")}
-              ${spec(car.vmax ? fmtNum(car.vmax) : "—", car.vmax ? " km/h" : "", "Vitesse max")}
-            </div>
-            <p class="card__desc">${locked ? "Ouvre des boosters pour découvrir ce modèle et sa fiche complète." : esc(car.desc)}</p>
-            <div class="card__foot">
-              <span class="card__engine">${locked ? BODY_LABEL[car.body] || "" : esc(car.engine)}</span>
-              <span class="card__origin">${locked ? "" : `${FLAGS[car.country] || ""} ${car.year}`}</span>
+              ${spec(fmtNum(car.hp), "ch", "Puissance")}
+              ${spec(fmtAcc(car.acc), car.acc == null ? "" : "s", "0–100")}
+              ${spec(car.vmax ? fmtNum(car.vmax) : "—", car.vmax ? "km/h" : "", "V. max")}
             </div>
           </div>
           <div class="card__holo"></div><div class="card__sparkle"></div><div class="card__glare"></div>
@@ -365,7 +360,15 @@
     const view = currentView();
     $$(".tabs a").forEach((a) => { if (a.dataset.view === view) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
   }
+  // Transition douce entre les vues (View Transitions API quand le navigateur la connaît)
   function render() {
+    if (document.startViewTransition && !reduceMotion && render.ready) {
+      const vt = document.startViewTransition(renderNow);
+      vt.ready.catch(() => {}); vt.finished.catch(() => {}); vt.updateCallbackDone?.catch(() => {});
+    } else renderNow();
+    render.ready = true;
+  }
+  function renderNow() {
     clearInterval(render.timer);
     if (!state.me) return renderAuth();
     setTopbar();
@@ -379,8 +382,8 @@
   function garageHTML() {
     const cfg = state.config, me = state.me;
     const d = doubles(), pts = recyclePoints();
-    return `<div class="garage" id="garage">
-      <p class="odds-title">Points garage</p>
+    return `<div class="panel garage" id="garage">
+      <p class="panel__title">Points garage</p>
       <div class="garage__points"><b>${fmtNum(me.points || 0)}</b><span>points</span></div>
       <p class="garage__hint">${d ? `Tu as ${d} carte${d > 1 ? "s" : ""} en double. Recycle-les pour gagner ${pts} points : plus une carte est rare, plus elle rapporte.` : "Aucune carte en double pour l'instant. Les doubles pourront être recyclés en points."}</p>
       <div class="garage__actions">
@@ -414,6 +417,8 @@
   }
   function refreshGarage() {
     const g = $("#garage");
+    const sp = $("#stat-points");
+    if (sp) sp.textContent = fmtNum(state.me.points || 0);
     if (!g) return;
     g.outerHTML = garageHTML();
     bindGarage();
@@ -434,25 +439,24 @@
     const deadline = me.nextPackIn != null ? Date.now() + me.nextPackIn : null;
     const total = state.rarities.reduce((s, r) => s + r.weight, 0);
     const every = cfg.packInterval >= 3600000 ? `${Math.round(cfg.packInterval / 3600000)} h` : `${Math.round(cfg.packInterval / 60000)} min`;
-    app.innerHTML = `<section class="page">
-      <div class="packs">
-        <div class="stage" id="stage">
-          ${me.packs > 0 ? packHTML(me.packs) : `<p class="pack-empty"><strong>Plus de booster pour l'instant</strong>De nouveaux boosters arrivent automatiquement, ou achète-en un avec tes points garage.</p>`}
-          ${me.packs > 0 ? `<button class="btn-ghost pack-auto" type="button" id="auto-open">Ouvrir sans découper</button>` : ""}
-          <div class="reveal" id="reveal"></div>
+    app.innerHTML = `<section class="arena">
+      <div class="arena__stats reveal-up" style="--d:0">
+        <div class="stat"><b id="pack-count">${me.packs}</b><span>${packWord(me.packs)} prêt${me.packs > 1 ? "s" : ""}</span></div>
+        <div class="stat" id="timer">${deadline ? `<b>${fmtDuration(deadline - Date.now())}</b><span>avant +${cfg.packsPerTick} ${packWord(cfg.packsPerTick)}</span>` : `<b>Pleine</b><span>réserve de ${cfg.maxPacks}</span>`}</div>
+        <div class="stat"><b id="stat-points">${fmtNum(me.points || 0)}</b><span>points garage</span></div>
+      </div>
+      <div class="stage" id="stage">
+        ${me.packs > 0 ? packHTML(me.packs) : `<p class="pack-empty"><strong>Plus de booster pour l'instant</strong>De nouveaux boosters arrivent automatiquement, ou achète-en un avec tes points garage.</p>`}
+        <div class="reveal" id="reveal"></div>
+      </div>
+      ${me.packs > 0 ? `<div class="arena__under"><button class="btn-ghost" type="button" id="auto-open">Ouvrir sans découper</button></div>` : ""}
+      <div class="arena__panels reveal-up" style="--d:2">
+        ${garageHTML()}
+        <div class="panel">
+          <p class="panel__title">Chances par carte</p>
+          <ul class="odds">${state.rarities.slice().reverse().map((r) => `<li style="--c:var(${RARITY_VAR[r.id]})">${r.name}<span>${(r.weight / total * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %</span></li>`).join("")}</ul>
+          <p class="panel__note">La 5ᵉ carte de chaque booster est au moins Rare. ${cfg.packsPerTick} ${packWord(cfg.packsPerTick)} offerts toutes les ${every}, jusqu'à ${cfg.maxPacks} en réserve.</p>
         </div>
-        <aside class="side">
-          <div>
-            <div class="counter"><b id="pack-count">${me.packs}</b><span>${packWord(me.packs)} prêt${me.packs > 1 ? "s" : ""} à ouvrir</span></div>
-            <p class="timer" id="timer">${deadline ? `+${cfg.packsPerTick} ${packWord(cfg.packsPerTick)} dans <b>${fmtDuration(deadline - Date.now())}</b>` : `Réserve pleine (${cfg.maxPacks}) : ouvre un booster pour relancer la recharge.`}</p>
-          </div>
-          ${garageHTML()}
-          <details class="odds-box">
-            <summary>Chances par carte</summary>
-            <ul class="odds">${state.rarities.slice().reverse().map((r) => `<li style="--c:var(${RARITY_VAR[r.id]})">${r.name}<span>${(r.weight / total * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %</span></li>`).join("")}</ul>
-            <p class="odds-note">La 5ᵉ carte de chaque booster est au moins Rare. Tu reçois ${cfg.packsPerTick} ${packWord(cfg.packsPerTick)} gratuits toutes les ${every}, jusqu'à ${cfg.maxPacks} en réserve.</p>
-          </details>
-        </aside>
       </div>
     </section>`;
 
@@ -460,7 +464,7 @@
       render.timer = setInterval(async () => {
         const left = deadline - Date.now();
         const t = $("#timer b");
-        if (t) t.textContent = fmtDuration(left);
+        if (t) t.textContent = fmtDuration(Math.max(0, left));
         if (left <= 0) {
           clearInterval(render.timer);
           state.me = await api("/api/me").catch(() => state.me);
@@ -482,13 +486,11 @@
     const pick = (r) => { const l = state.catalog.filter((c) => c.rarity === r); return l[hash(String(new Date().getDate()) + r) % l.length]; };
     const show = [pick(4), pick(6), pick(5)];
     const reg = state.authMode === "register";
-    app.innerHTML = `<section class="auth">
-      <div class="auth__show">
-        <h1 class="auth__title">Holo<span>Garage</span></h1>
-        <div class="fan">${show.map((c) => cardHTML(c)).join("")}</div>
-        <p class="auth__lede">${state.catalog.length} voitures à collectionner, de la Clio à la McLaren F1. Ouvre tes boosters, fais briller les cartes rares et range-les dans ton classeur.</p>
-      </div>
-      <div class="auth__panel">
+    app.innerHTML = `<section class="hero">
+      <h1 class="hero__title reveal-up" style="--d:0">ApexPack</h1>
+      <p class="hero__lede reveal-up" style="--d:1">${state.catalog.length} vraies voitures en cartes holographiques, de la Clio à la McLaren F1. Ouvre des boosters, découpe-les, complète ton classeur.</p>
+      <div class="fan reveal-up" style="--d:2">${show.map((c, i) => `<div class="fan__item" style="--i:${i}"><div class="fan__float">${cardHTML(c)}</div></div>`).join("")}</div>
+      <div class="auth-card reveal-up" style="--d:3">
         <div class="seg" role="tablist">
           <button type="button" role="tab" aria-selected="${reg}" data-mode="register">Créer un compte</button>
           <button type="button" role="tab" aria-selected="${!reg}" data-mode="login">Se connecter</button>
@@ -505,12 +507,12 @@
             ${reg ? "<small>Au moins 6 caractères</small>" : ""}
           </div>
           <p class="form-error" id="form-error" role="alert"></p>
-          <button class="btn" type="submit">${reg ? `Créer mon compte et recevoir ${state.config.startPacks} boosters` : "Se connecter"}</button>
+          <button class="btn btn--block" type="submit">${reg ? `Créer mon compte et recevoir ${state.config.startPacks} boosters` : "Se connecter"}</button>
         </form>
       </div>
     </section>`;
     $$(".fan .card").forEach((c) => tilt(c));
-    $$(".seg button").forEach((b) => b.addEventListener("click", () => { state.authMode = b.dataset.mode; renderAuth(); $("#pseudo").focus(); }));
+    $$(".auth-card .seg button").forEach((b) => b.addEventListener("click", () => { state.authMode = b.dataset.mode; renderAuth(); $$(".reveal-up").forEach((el) => el.classList.add("no-anim")); $("#pseudo").focus(); }));
     $("#auth-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const f = e.currentTarget;
@@ -546,7 +548,7 @@
       <div class="pack__stack">${ghosts}</div>
       <div class="pack__body">
         <div class="pack__label">
-          <div class="pack__brand">Holo<span>Garage</span></div>
+          <div class="pack__brand"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10 16.5 18h-9Z" fill="currentColor"/></svg>ApexPack</div>
           ${carSVG(hero, false, "pack__car")}
           <div class="pack__info"><span>Booster</span><span><b>${state.config.cardsPerPack}</b> cartes</span></div>
         </div>
@@ -629,7 +631,7 @@
       dragging = false;
       pack.style.setProperty("--cut", "1");
       pack.classList.add("is-open");
-      $("#auto-open")?.remove();
+      $(".arena__under")?.remove();
       if (!request) request = fetchPack();
       const result = await request;
       if (!result) return;
@@ -681,12 +683,12 @@
     refreshGarage();
 
     pack.classList.add("is-gone");
-    $(".packs")?.classList.add("is-revealing");
+    $(".arena")?.classList.add("is-revealing");
     const reveal = $("#reveal");
     const cards = result.cards.map((id) => state.byId[id]);
     reveal.innerHTML = `<div class="reveal__row">` + cards.map((car, i) => `<button class="flip${car.rarity >= 4 ? " is-hot" : ""}" type="button" style="--i:${i};--hc:var(${RARITY_VAR[car.rarity]})" data-id="${car.id}" aria-label="Retourner la carte ${i + 1}">
         <div class="flip__inner">
-          <div class="flip__back"><div class="cardback"><div>Holo<span>Garage</span></div></div></div>
+          <div class="flip__back"><div class="cardback"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10 16.5 18h-9Z" fill="currentColor"/></svg><span>ApexPack</span></div></div>
           <div class="flip__front"><div class="burst"></div>${cardHTML(car, { isNew: newOnes.has(car.id) })}</div>
         </div>
       </button>`).join("") + `</div>` +
@@ -833,7 +835,7 @@
     }
     const order = list.map((c) => c.id);
     if (b.view === "grid") {
-      body.innerHTML = `<p class="result-count">${list.length} carte${list.length > 1 ? "s" : ""}</p><div class="grid">${list.map(slotHTML).join("")}</div>`;
+      body.innerHTML = `<p class="result-count">${list.length} carte${list.length > 1 ? "s" : ""}</p><div class="grid">${list.map((c, i) => slotHTML(c).replace('class="slot"', `class="slot" style="--n:${Math.min(i, 24)}"`)).join("")}</div>`;
       $$(".slot[data-id]", body).forEach((s) => s.addEventListener("click", () => openViewer(s.dataset.id, order)));
       highlight(body);
       return;
@@ -856,7 +858,7 @@
     let leavesHTML = "";
     for (let i = 0; i < leaves; i++) {
       const front = i === 0
-        ? `<div class="leaf__side cover"><h2 class="cover__title">Holo<span>Garage</span></h2><div class="cover__owner">Classeur de<b>${esc(state.me.pseudo)}</b>${owned} / ${state.catalog.length} cartes</div><button class="btn" type="button" data-open>Ouvrir le classeur</button></div>`
+        ? `<div class="leaf__side cover"><h2 class="cover__title"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10 16.5 18h-9Z" fill="currentColor"/></svg>ApexPack</h2><div class="cover__owner">Classeur de<b>${esc(state.me.pseudo)}</b>${owned} / ${state.catalog.length} cartes</div><button class="btn" type="button" data-open>Ouvrir le classeur</button></div>`
         : `<div class="leaf__side sheet">${pageHTML(i * 2)}</div>`;
       const back = `<div class="leaf__side leaf__side--back sheet">${pageHTML(i * 2 + 1)}</div>`;
       leavesHTML += `<div class="leaf${i < b.spread ? " is-flipped" : ""}" data-leaf="${i}" style="--z:${i < b.spread ? i + 1 : leaves - i}">${front}${back}</div>`;

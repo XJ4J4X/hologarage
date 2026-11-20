@@ -1,7 +1,7 @@
 // Photos réelles des voitures, sous licence libre (Wikimedia Commons), avec crédit de l'auteur.
 // Le serveur les cherche une seule fois sur Wikipédia puis les garde en base.
 
-const UA = "HoloGarage/1.1 (jeu de cartes de collection; https://hologarage.onrender.com)";
+const UA = "ApexPack/1.2 (jeu de cartes de collection; https://hologarage.onrender.com)";
 
 // Titres exacts d'articles de Wikipédia en anglais quand la recherche simple risque de se tromper.
 const EN_TITLES = {

@@ -1,4 +1,4 @@
-// HoloGarage — serveur HTTP sans framework (Node ≥ 22)
+// ApexPack — serveur HTTP sans framework (Node ≥ 22)
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -363,7 +363,7 @@ async function main() {
     }
   });
 
-  server.listen(PORT, () => console.log(`HoloGarage en ligne sur http://localhost:${PORT} — ${CARS.length} cartes`));
+  server.listen(PORT, () => console.log(`ApexPack en ligne sur http://localhost:${PORT} — ${CARS.length} cartes`));
 }
 
 main().catch((e) => {

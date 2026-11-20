@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>HoloGarage — cartes de voitures à collectionner</title>
+  <title>ApexPack — cartes de voitures à collectionner</title>
   <meta name="description" content="Ouvre des boosters, collectionne des cartes holographiques de voitures et range-les dans ton classeur 3D.">
-  <meta name="theme-color" content="#0f1828">
+  <meta name="theme-color" content="#09090b">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar" hidden>
-    <a class="wordmark" href="#boosters" aria-label="HoloGarage, accueil">Holo<span>Garage</span></a>
+    <a class="wordmark" href="#boosters" aria-label="ApexPack, accueil"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10 16.5 18h-9Z" fill="currentColor"/></svg>ApexPack</a>
     <nav class="tabs" aria-label="Navigation principale">
       <a href="#boosters" data-view="boosters">Boosters</a>
       <a href="#classeur" data-view="classeur">Classeur</a>
@@ -26,6 +26,7 @@
       <button class="btn-ghost" id="logout" type="button">Se déconnecter</button>
     </div>
   </header>
+  <div class="ambient" aria-hidden="true"></div>
   <main id="app" tabindex="-1"></main>
   <div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-labelledby="viewer-title"></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

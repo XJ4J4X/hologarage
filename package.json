@@ -1,5 +1,5 @@
 {
-  "name": "hologarage",
+  "name": "apexpack",
   "version": "1.0.0",
   "description": "Jeu de cartes à collectionner de voitures : boosters, cartes holographiques et classeur 3D",
   "main": "server.js",
