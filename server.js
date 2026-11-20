@@ -140,6 +140,11 @@ function clientIp(req) {
   return String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
 }
 
+// Version des fichiers du site : change à chaque mise à jour, ce qui force les navigateurs à recharger app.js et styles.css
+const ASSET_VERSION = crypto.createHash("sha1")
+  .update(["app.js", "styles.css"].map((f) => { try { return fs.readFileSync(path.join(PUBLIC, f)); } catch { return ""; } }).join("|"))
+  .digest("hex").slice(0, 10);
+
 function serveStatic(req, res, pathname) {
   let file = path.normalize(path.join(PUBLIC, decodeURIComponent(pathname)));
   if (!file.startsWith(PUBLIC)) return send(res, 403, { error: "Interdit" });
@@ -148,9 +153,11 @@ function serveStatic(req, res, pathname) {
     const ext = path.extname(file);
     fs.readFile(file, (err2, buf) => {
       if (err2) return send(res, 404, { error: "Introuvable" });
+      if (ext === ".html") buf = Buffer.from(String(buf).replace(/(\/(?:app\.js|styles\.css))"/g, `$1?v=${ASSET_VERSION}"`));
+      const versioned = /[?&]v=/.test(req.url);
       res.writeHead(200, {
         "Content-Type": MIME[ext] || "application/octet-stream",
-        "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=3600",
+        "Cache-Control": ext === ".html" ? "no-cache" : versioned ? "public, max-age=31536000, immutable" : "no-cache",
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "same-origin",
       });
