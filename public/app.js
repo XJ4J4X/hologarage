@@ -541,73 +541,100 @@
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
     return h ? `${h} h ${String(m).padStart(2, "0")} min` : `${m} min ${String(sec).padStart(2, "0")} s`;
   }
+  // ───────── Booster ─────────
+  // Une voiture rare est mise en avant sur chaque booster (comme l'illustration d'un paquet de cartes)
+  function featuredCar() {
+    const pool = state.catalog.filter((c) => c.rarity >= 5 && c.img);
+    const list = pool.length ? pool : state.catalog;
+    return list[Math.floor(Math.random() * list.length)];
+  }
   function packHTML(n) {
-    const ghosts = Array.from({ length: Math.min(n, 5) - 1 }, (_, i) => `<div class="pack__ghost" style="--i:${Math.min(n, 5) - 1 - i}"></div>`).join("");
-    const hero = state.catalog.find((c) => c.id === "mclaren-f1-1992") || state.catalog[0];
-    return `<div class="pack" id="pack" role="group" aria-label="Booster : glisse le long des pointillés pour le découper">
-      <div class="pack__stack">${ghosts}</div>
-      <div class="pack__body">
+    const ghosts = Array.from({ length: Math.min(n, 4) - 1 }, (_, i) => `<div class="pack__ghost" style="--i:${Math.min(n, 4) - 1 - i}"></div>`).join("");
+    const hero = featuredCar();
+    const art = hero.img
+      ? `<img class="pack__photo" src="${esc(hero.img.src)}" alt="" referrerpolicy="no-referrer" draggable="false" onerror="this.remove()">`
+      : carSVG(hero, false, "pack__car");
+    const LOGO = `<svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10 16.5 18h-9Z" fill="currentColor"/></svg>`;
+    const skin = `<div class="pack__skin">
+        <div class="pack__art">${art}</div>
+        <div class="pack__foil"></div>
         <div class="pack__label">
-          <div class="pack__brand"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10 16.5 18h-9Z" fill="currentColor"/></svg>ApexPack</div>
-          ${carSVG(hero, false, "pack__car")}
-          <div class="pack__info"><span>Booster</span><span><b>${state.config.cardsPerPack}</b> cartes</span></div>
+          <div class="pack__brand">${LOGO}<span>ApexPack</span></div>
+          <div class="pack__feature"><small>À l'intérieur peut-être</small><b>${esc(hero.brand)} ${esc(hero.model)}</b></div>
+          <div class="pack__info"><span class="pack__pips"><i></i><i></i><i></i><i></i><i></i><i></i></span><span><b>${state.config.cardsPerPack}</b> cartes</span></div>
         </div>
-      </div>
-      <div class="pack__top"></div>
-      <div class="pack__flap"></div>
-      <div class="pack__tear"></div>
+        <div class="pack__crimp pack__crimp--top"></div>
+        <div class="pack__crimp pack__crimp--bottom"></div>
+        <div class="pack__shine"></div>
+      </div>`;
+    return `<div class="pack" id="pack" role="group" aria-label="Booster : trace un trait le long de la ligne pour l'ouvrir">
+      <div class="pack__stack">${ghosts}</div>
+      <div class="pack__shadow"></div>
+      <div class="pack__body">${skin}</div>
+      <div class="pack__top">${skin}</div>
+      <div class="pack__flap">${skin}</div>
+      <div class="pack__light"></div>
+      <div class="pack__guide"><i></i></div>
       <div class="pack__cutline"></div>
       <div class="pack__spark"></div>
-      <div class="pack__hint" aria-hidden="true"><span class="pack__scissors">✂</span> Glisse le long des pointillés</div>
+      <div class="pack__hint" aria-hidden="true"><span class="pack__finger"></span>Trace un trait pour ouvrir</div>
     </div>`;
   }
   const packWord = (n) => (n > 1 ? "boosters" : "booster");
-  // ───────── Découpe du booster à la souris / au doigt ─────────
+
+  // ───────── Découpe façon Pokémon TCG Pocket : un geste horizontal sur le haut du paquet ─────────
+  const CUT_Y = 0.17; // hauteur de la ligne de découpe (en fraction de la hauteur du paquet)
   function setupCutting(pack) {
-    let cut = 0, dragging = false, finished = false, request = null, lastFlake = 0;
+    let cut = 0, dir = 0, dragging = false, finished = false, request = null, lastFlake = 0;
     const setCut = (v) => {
       cut = Math.min(1, Math.max(cut, v));
       pack.style.setProperty("--cut", cut.toFixed(4));
       if (cut > 0) pack.classList.add("is-cutting");
-      if (cut > 0.55 && !request) request = fetchPack();
-      if (cut >= 0.96) finish();
+      if (cut > 0.5 && !request) request = fetchPack();
+      if (cut >= 0.97) finish();
     };
+    const edge = () => (dir > 0 ? cut : 1 - cut); // position horizontale de la lame (0 à 1)
     const flake = () => {
       const now = performance.now();
-      if (reduceMotion || now - lastFlake < 35) return;
+      if (reduceMotion || now - lastFlake < 30) return;
       lastFlake = now;
       const f = document.createElement("i");
       f.className = "pack__flake";
-      f.style.left = `${cut * 100}%`;
+      f.style.left = `${edge() * 100}%`;
       f.style.setProperty("--h", Math.floor(Math.random() * 360));
       pack.appendChild(f);
-      const dx = (Math.random() - 0.5) * 80, dy = 40 + Math.random() * 90, rot = (Math.random() - 0.5) * 720;
+      const dx = (Math.random() - 0.5) * 70 - dir * 20, dy = 40 + Math.random() * 100, rot = (Math.random() - 0.5) * 720;
       f.animate(
-        [{ transform: "translate(-50%,-50%) scale(1)", opacity: 1 }, { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) rotate(${rot}deg) scale(.4)`, opacity: 0 }],
-        { duration: 700 + Math.random() * 400, easing: "cubic-bezier(.2,.6,.4,1)" }
+        [{ transform: "translate(-50%,-50%) scale(1)", opacity: 1 }, { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) rotate(${rot}deg) scale(.3)`, opacity: 0 }],
+        { duration: 600 + Math.random() * 500, easing: "cubic-bezier(.2,.6,.4,1)" }
       ).onfinish = () => f.remove();
     };
     const ratio = (e) => {
       const r = pack.getBoundingClientRect();
       return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
     };
+    const setDir = (d) => {
+      dir = d;
+      pack.classList.toggle("is-rtl", d < 0);
+    };
     pack.addEventListener("pointerdown", (e) => {
       if (finished) return;
       const { x, y } = ratio(e);
-      if (y > 0.42 || x > cut + 0.22) {
-        pack.querySelector(".pack__hint").animate([{ transform: "translate(-50%,0)" }, { transform: "translate(-50%,-8px)" }, { transform: "translate(-50%,0)" }], { duration: 400 });
+      if (Math.abs(y - CUT_Y) > 0.16) { // trop loin de la ligne : on montre l'indice
+        pack.querySelector(".pack__hint").animate([{ transform: "translate(-50%,0)" }, { transform: "translate(-50%,-6px)" }, { transform: "translate(-50%,0)" }], { duration: 380 });
         return;
       }
+      if (!dir) setDir(x < 0.5 ? 1 : -1);
       dragging = true;
       pack.setPointerCapture(e.pointerId);
       pack.classList.add("is-dragging");
-      setCut(Math.max(cut, Math.min(x, cut + 0.05)));
       e.preventDefault();
     });
     pack.addEventListener("pointermove", (e) => {
       if (!dragging || finished) return;
       const { x } = ratio(e);
-      if (x > cut && x <= cut + 0.3) { setCut(x); flake(); }
+      const p = dir > 0 ? x : 1 - x; // progression dans le sens choisi
+      if (p > cut && p <= cut + 0.35) { setCut(p); flake(); }
     });
     const stop = () => { dragging = false; pack.classList.remove("is-dragging"); };
     pack.addEventListener("pointerup", stop);
@@ -615,7 +642,9 @@
 
     $("#auto-open")?.addEventListener("click", () => {
       if (finished) return;
-      const from = cut, t0 = performance.now(), dur = reduceMotion ? 1 : 750;
+      if (!dir) setDir(1);
+      const from = cut, t0 = performance.now(), dur = reduceMotion ? 1 : 650;
+      pack.classList.add("is-dragging");
       const step = (t) => {
         const k = Math.min(1, (t - t0) / dur);
         setCut(from + (1 - from) * (1 - Math.pow(1 - k, 3)));
@@ -629,13 +658,14 @@
       if (finished) return;
       finished = true;
       dragging = false;
+      pack.classList.remove("is-dragging");
       pack.style.setProperty("--cut", "1");
-      pack.classList.add("is-open");
+      pack.classList.add("is-open"); // la languette s'envole, la lumière sort
       $(".arena__under")?.remove();
       if (!request) request = fetchPack();
       const result = await request;
       if (!result) return;
-      setTimeout(() => revealPack(pack, result), reduceMotion ? 0 : 350);
+      setTimeout(() => revealPack(pack, result), reduceMotion ? 0 : 750);
     }
   }
 
@@ -675,62 +705,143 @@
     return newOnes;
   }
 
+
+  // ───────── Révélation : pile de cartes à faire glisser une par une ─────────
   function revealPack(pack, result) {
     clearInterval(render.timer);
     if (!pack.isConnected) { applyResult(result); return; }
     const newOnes = applyResult(result);
     $("#pack-count").textContent = result.packs;
     refreshGarage();
-
-    pack.classList.add("is-gone");
     $(".arena")?.classList.add("is-revealing");
+
+    // la plus rare en dernier, comme dans les jeux de cartes
+    const cards = result.cards.map((id) => state.byId[id]).map((c, i) => ({ c, i })).sort((a, b) => a.c.rarity - b.c.rarity || a.i - b.i).map((x) => x.c);
+    const total = cards.length;
     const reveal = $("#reveal");
-    const cards = result.cards.map((id) => state.byId[id]);
-    reveal.innerHTML = `<div class="reveal__row">` + cards.map((car, i) => `<button class="flip${car.rarity >= 4 ? " is-hot" : ""}" type="button" style="--i:${i};--hc:var(${RARITY_VAR[car.rarity]})" data-id="${car.id}" aria-label="Retourner la carte ${i + 1}">
-        <div class="flip__inner">
-          <div class="flip__back"><div class="cardback"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10 16.5 18h-9Z" fill="currentColor"/></svg><span>ApexPack</span></div></div>
-          <div class="flip__front"><div class="burst"></div>${cardHTML(car, { isNew: newOnes.has(car.id) })}</div>
-        </div>
-      </button>`).join("") + `</div>` +
-      `<div class="reveal-actions" id="reveal-actions">
-        <button class="btn btn--light" type="button" id="reveal-all">Tout retourner</button>
+    reveal.innerHTML = `
+      <div class="deck" id="deck">
+        ${cards.map((car, i) => `<div class="deck__card${car.rarity >= 4 ? " is-rare" : ""}" data-i="${i}" data-id="${car.id}" style="--k:${i};--hc:var(${RARITY_VAR[car.rarity]})">
+          <div class="deck__burst"></div>${cardHTML(car, { isNew: newOnes.has(car.id) })}
+        </div>`).join("")}
+      </div>
+      <div class="deck__bar">
+        <span class="deck__count" id="deck-count">1 / ${total}</span>
+        <span class="deck__tip">Glisse la carte sur le côté ou touche-la pour voir la suivante</span>
+        <button class="btn-ghost" type="button" id="deck-skip">Tout voir</button>
       </div>`;
+    pack.classList.add("is-gone"); // le paquet descend, les cartes remontent
     requestAnimationFrame(() => requestAnimationFrame(() => reveal.classList.add("is-live")));
 
-    const flips = $$(".flip", reveal);
-    let finished = false;
-    const done = () => {
-      if (finished || !flips.every((f) => f.classList.contains("is-flipped"))) return;
-      finished = true;
-      const best = cards.reduce((a, c) => (c.rarity > a.rarity ? c : a), cards[0]);
+    const deck = $("#deck");
+    const els = $$(".deck__card", deck);
+    let idx = 0, busy = false;
+
+    const layout = () => {
+      els.forEach((el, i) => {
+        const pos = i - idx; // 0 = carte du dessus
+        el.style.setProperty("--pos", Math.max(0, pos));
+        el.style.zIndex = String(100 - i);
+        el.classList.toggle("is-top", pos === 0);
+        el.hidden = pos < 0;
+      });
+      $("#deck-count").textContent = `${Math.min(idx + 1, total)} / ${total}`;
+      const top = els[idx];
+      if (top && top.classList.contains("is-rare") && !top.dataset.shown) {
+        top.dataset.shown = "1";
+        top.classList.add("is-intro");
+        setTimeout(() => top.classList.remove("is-intro"), 1400);
+      }
+    };
+
+    const fling = (el, dirX, vy = 0) => {
+      if (busy) return;
+      busy = true;
+      const w = window.innerWidth;
+      const from = el._dx || 0;
+      el.classList.add("is-flung");
+      el.animate(
+        [{ transform: `translate(${from}px, 0) rotate(${from * 0.06}deg)` }, { transform: `translate(${dirX * w}px, ${vy * 0.4 - 60}px) rotate(${dirX * 40}deg)` }],
+        { duration: reduceMotion ? 1 : 480, easing: "cubic-bezier(.3,.1,.6,1)", fill: "forwards" }
+      ).onfinish = () => {
+        el.hidden = true;
+        idx++;
+        busy = false;
+        if (idx >= total) summary();
+        else layout();
+      };
+    };
+
+    // Glisser la carte du dessus
+    els.forEach((el) => {
+      let sx = 0, sy = 0, t0 = 0, moving = false;
+      const card = $(".card", el);
+      tilt(el, { target: card, strength: 0.6 });
+      el.addEventListener("pointerdown", (e) => {
+        if (!el.classList.contains("is-top") || busy) return;
+        moving = true; sx = e.clientX; sy = e.clientY; t0 = performance.now(); el._dx = 0;
+        el.setPointerCapture(e.pointerId);
+        el.classList.add("is-dragging");
+      });
+      el.addEventListener("pointermove", (e) => {
+        if (!moving) return;
+        const dx = e.clientX - sx, dy = e.clientY - sy;
+        el._dx = dx;
+        el.style.translate = `${dx}px ${dy * 0.25}px`;
+        el.style.rotate = `${dx * 0.06}deg`;
+      });
+      const end = (e) => {
+        if (!moving) return;
+        moving = false;
+        el.classList.remove("is-dragging");
+        const dx = e.clientX - sx, dt = performance.now() - t0;
+        const v = dx / Math.max(dt, 1);
+        el.style.translate = ""; el.style.rotate = "";
+        if (Math.abs(dx) > 90 || Math.abs(v) > 0.6) fling(el, Math.sign(dx) || 1, e.clientY - sy);
+        else if (Math.abs(dx) < 6) { el._dx = 0; fling(el, 1); } // simple toucher
+        else el._dx = 0; // revient en place
+      };
+      el.addEventListener("pointerup", end);
+      el.addEventListener("pointercancel", end);
+    });
+
+    const onKey = (e) => {
+      if (!deck.isConnected) { document.removeEventListener("keydown", onKey); return; }
+      if (!$("#viewer").hidden) return;
+      if (["ArrowRight", "ArrowLeft", " ", "Enter"].includes(e.key) && idx < total) {
+        e.preventDefault();
+        fling(els[idx], e.key === "ArrowLeft" ? -1 : 1);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    $("#deck-skip").addEventListener("click", () => { idx = total; summary(); });
+
+    function summary() {
+      document.removeEventListener("keydown", onKey);
+      const best = cards[cards.length - 1];
       const fresh = cards.filter((c) => newOnes.has(c.id)).length;
-      $("#reveal-actions").innerHTML = `
-        <p class="reveal-sum">${fresh ? `${fresh} nouvelle${fresh > 1 ? "s" : ""} carte${fresh > 1 ? "s" : ""} pour ta collection` : "Que des doubles cette fois : recycle-les en points garage"}</p>
-        ${state.me.packs > 0 ? `<button class="btn" type="button" id="again">Ouvrir le booster suivant</button>` : ""}
-        <button class="btn btn--light" type="button" id="to-binder">Voir dans le classeur</button>`;
+      reveal.innerHTML = `
+        <div class="summary">
+          ${cards.map((car, i) => `<button class="summary__card" type="button" data-id="${car.id}" style="--k:${i}">${cardHTML(car, { isNew: newOnes.has(car.id) })}</button>`).join("")}
+        </div>
+        <div class="reveal-actions">
+          <p class="reveal-sum">${fresh ? `${fresh} nouvelle${fresh > 1 ? "s" : ""} carte${fresh > 1 ? "s" : ""} pour ta collection` : "Que des doubles cette fois : recycle-les en points garage"}</p>
+          ${state.me.packs > 0 ? `<button class="btn" type="button" id="again">Ouvrir le booster suivant</button>` : ""}
+          <button class="btn btn--light" type="button" id="to-binder">Voir dans le classeur</button>
+        </div>`;
+      reveal.classList.add("is-summary");
+      $("#stage")?.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+      const order = cards.map((c) => c.id);
+      $$(".summary__card", reveal).forEach((b) => {
+        tilt(b, { target: $(".card", b), strength: 0.7 });
+        b.addEventListener("click", () => openViewer(b.dataset.id, order));
+      });
       $("#again")?.addEventListener("click", () => { state.opening = false; render(); });
       $("#to-binder").addEventListener("click", () => { state.opening = false; goToCard(best.id); });
       state.opening = false;
-    };
-    const flipOne = (f) => {
-      if (f.classList.contains("is-flipped")) return;
-      f.classList.add("is-flipped");
-      f.classList.remove("is-hot");
-      f.setAttribute("aria-label", "Voir la carte en grand");
-      done();
-    };
-    flips.forEach((f) => {
-      const card = $(".card", f);
-      tilt(f, { target: card, strength: 0.7 });
-      f.addEventListener("click", () => {
-        if (!f.classList.contains("is-flipped")) flipOne(f);
-        else openViewer(f.dataset.id, cards.map((c) => c.id));
-      });
-    });
-    $("#reveal-all").addEventListener("click", (e) => {
-      e.currentTarget.disabled = true;
-      flips.forEach((f, i) => setTimeout(() => flipOne(f), i * 160));
-    });
+    }
+
+    layout();
   }
 
   // ───────── Classeur ─────────
