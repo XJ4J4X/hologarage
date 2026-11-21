@@ -332,12 +332,17 @@ async function main() {
       if (r.packs <= 0) return send(res, 429, { error: "Plus de booster disponible pour le moment.", nextPackIn: r.nextIn });
       // on enregistre d'abord la recharge, puis on décrémente de façon atomique
       if (r.packs !== user.packs || r.clock !== user.pack_clock) await db.setPacks(user.id, r.packs, r.clock);
-      const cards = drawPack();
-      const left = await db.openPack(user.id, r.packs, r.clock, cards, now);
+      // { count: "all" } ou un nombre : ouvre plusieurs boosters d'un coup (50 maximum par requête)
+      const body = await readJson(req).catch(() => ({}));
+      const wanted = body.count === "all" ? r.packs : Math.floor(Number(body.count) || 1);
+      const n = Math.max(1, Math.min(r.packs, wanted, 50));
+      const packs = Array.from({ length: n }, drawPack);
+      const cards = packs.flat();
+      const left = await db.openPack(user.id, r.packs, r.clock, cards, now, n);
       if (left === null) return send(res, 409, { error: "Booster déjà ouvert dans un autre onglet. Recharge la page." });
       const after = refill({ packs: left, pack_clock: r.clock }, now);
       leaderboardCache = null;
-      send(res, 200, { cards, packs: after.packs, nextPackIn: after.nextIn });
+      send(res, 200, { cards, packs: after.packs, nextPackIn: after.nextIn, opened: n });
     },
   };
 

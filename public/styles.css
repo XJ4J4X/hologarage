@@ -928,3 +928,23 @@ button { font: inherit; color: inherit; cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; transition-delay: 0s !important; }
 }
+
+/* Bouton son */
+.btn-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--line-2); background: none; color: var(--mute); transition: color .2s, border-color .2s, background .2s; }
+.btn-icon:hover { color: var(--text); border-color: rgba(255,255,255,.28); }
+.btn-icon svg { width: 16px; height: 16px; }
+.btn-icon .ico-off { display: none; }
+.btn-icon[aria-pressed="true"] .ico-on { display: none; }
+.btn-icon[aria-pressed="true"] .ico-off { display: block; }
+
+/* Ouverture groupée */
+.arena__under { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.haul .binder-head { margin-bottom: 30px; }
+.haul__card { animation: haul-in .7s var(--spring) both !important; animation-delay: calc(var(--n, 0) * 45ms + 150ms) !important; }
+@keyframes haul-in { from { opacity: 0; transform: translateY(40px) scale(.8) rotate(-3deg); filter: brightness(2) blur(4px); } }
+.haul__card.is-rare::before {
+  content: ""; position: absolute; inset: -12%; z-index: -1; border-radius: 30%;
+  background: radial-gradient(closest-side, var(--hc), transparent);
+  opacity: .28; animation: halo 2.8s ease-in-out infinite;
+}
+.haul__actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin-top: 34px; }

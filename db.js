@@ -179,18 +179,21 @@ function makeApi(q, tx) {
       return true;
     },
     // Ouvre un booster de façon atomique : décrémente le stock (si toujours égal à `expected`) et range les cartes.
-    async openPack(userId, expected, clock, cars, now) {
+    // Ouvre n boosters d'un coup (n = 1 pour un booster normal)
+    async openPack(userId, expected, clock, cars, now, n = 1) {
       return tx(async (tq) => {
         const upd = await tq(
-          `UPDATE users SET packs = packs - 1, pack_clock = $3, opened = opened + 1 WHERE id = $1 AND packs = $2 AND packs > 0 RETURNING packs`,
-          [userId, expected, clock]
+          `UPDATE users SET packs = packs - $4, pack_clock = $3, opened = opened + $4 WHERE id = $1 AND packs = $2 AND packs >= $4 RETURNING packs`,
+          [userId, expected, clock, n]
         );
         if (!upd.length) return null;
-        for (const carId of cars) {
+        const counts = new Map();
+        for (const carId of cars) counts.set(carId, (counts.get(carId) || 0) + 1);
+        for (const [carId, k] of counts) {
           await tq(
-            `INSERT INTO collection (user_id, car_id, count, first_at) VALUES ($1,$2,1,$3)
-             ON CONFLICT (user_id, car_id) DO UPDATE SET count = collection.count + 1`,
-            [userId, carId, now]
+            `INSERT INTO collection (user_id, car_id, count, first_at) VALUES ($1,$2,$4,$3)
+             ON CONFLICT (user_id, car_id) DO UPDATE SET count = collection.count + $4`,
+            [userId, carId, now, k]
           );
         }
         return Number(upd[0].packs);

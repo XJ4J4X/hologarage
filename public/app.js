@@ -81,6 +81,121 @@
   const doubles = () => Object.entries(state.me?.collection || {}).reduce((s, [, c]) => s + Math.max(0, c.count - 1), 0);
   const recyclePoints = () => Object.entries(state.me?.collection || {}).reduce((s, [id, c]) => s + Math.max(0, c.count - 1) * (state.config.recycleValue?.[state.byId[id]?.rarity] || 1), 0);
 
+
+  // ───────── Sons (générés en direct avec la Web Audio API, aucun fichier) ─────────
+  const sfx = (() => {
+    let ctx = null, master = null, noiseBuf = null, lastGrain = 0;
+    let muted = store.get("hg_mute", false);
+    const ok = () => !muted && (window.AudioContext || window.webkitAudioContext);
+    function ac() {
+      if (!ctx) {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        master = ctx.createGain();
+        master.gain.value = 0.55;
+        const comp = ctx.createDynamicsCompressor();
+        master.connect(comp); comp.connect(ctx.destination);
+        noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+        const d = noiseBuf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      }
+      if (ctx.state === "suspended") ctx.resume();
+      return ctx;
+    }
+    function env(g, t, a, peak, dur) {
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + a);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    }
+    function tone(freq, { at = 0, dur = 0.25, type = "sine", vol = 0.15, to = null, attack = 0.005, detune = 0 } = {}) {
+      const c = ac(), t = c.currentTime + at;
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = type; o.frequency.setValueAtTime(freq, t); o.detune.value = detune;
+      if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
+      env(g, t, attack, vol, dur);
+      o.connect(g); g.connect(master);
+      o.start(t); o.stop(t + dur + 0.05);
+    }
+    function noise({ at = 0, dur = 0.2, vol = 0.2, type = "bandpass", f = 1200, f2 = null, q = 1, attack = 0.005 } = {}) {
+      const c = ac(), t = c.currentTime + at;
+      const s = c.createBufferSource(), fl = c.createBiquadFilter(), g = c.createGain();
+      s.buffer = noiseBuf; s.loop = true;
+      fl.type = type; fl.frequency.setValueAtTime(f, t); fl.Q.value = q;
+      if (f2) fl.frequency.exponentialRampToValueAtTime(f2, t + dur);
+      env(g, t, attack, vol, dur);
+      s.connect(fl); fl.connect(g); g.connect(master);
+      s.start(t, Math.random()); s.stop(t + dur + 0.05);
+    }
+    const bell = (f, at, vol = 0.09, dur = 0.9) => {
+      tone(f, { at, dur, type: "sine", vol });
+      tone(f * 2.01, { at, dur: dur * 0.6, type: "sine", vol: vol * 0.35 });
+      tone(f * 3.02, { at, dur: dur * 0.3, type: "triangle", vol: vol * 0.12 });
+    };
+    // gamme pentatonique (do majeur) pour les mélodies de rareté
+    const SCALE = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51, 1567.98, 1760, 2093];
+
+    const api = {
+      get muted() { return muted; },
+      toggle() { muted = !muted; store.set("hg_mute", muted); if (!muted) api.tick(); return muted; },
+      unlock() { if (ok()) ac(); },
+      tick() { if (!ok()) return; tone(1400, { dur: 0.05, vol: 0.05, type: "triangle" }); },
+      // grain de découpe : petit crissement dont la hauteur monte avec la progression
+      cut(progress) {
+        if (!ok()) return;
+        const now = performance.now();
+        if (now - lastGrain < 28) return;
+        lastGrain = now;
+        noise({ dur: 0.05, vol: 0.12, type: "highpass", f: 2500 + progress * 4500, q: 0.7, attack: 0.002 });
+        tone(900 + progress * 900, { dur: 0.03, vol: 0.015, type: "sawtooth" });
+      },
+      tear() {
+        if (!ok()) return;
+        noise({ dur: 0.35, vol: 0.35, type: "bandpass", f: 3200, f2: 600, q: 0.8, attack: 0.003 });
+        noise({ at: 0.04, dur: 0.18, vol: 0.18, type: "highpass", f: 5000, q: 0.5 });
+        tone(110, { dur: 0.25, vol: 0.25, type: "sine", to: 55 });
+      },
+      shine() {
+        if (!ok()) return;
+        noise({ dur: 1.1, vol: 0.06, type: "highpass", f: 6000, f2: 9000, q: 0.3, attack: 0.25 });
+        [0, 2, 4, 5, 7].forEach((k, i) => bell(SCALE[k], 0.1 + i * 0.07, 0.05, 1.1));
+      },
+      whoosh(vol = 0.16) {
+        if (!ok()) return;
+        noise({ dur: 0.32, vol, type: "bandpass", f: 400, f2: 2400, q: 1.2, attack: 0.08 });
+      },
+      swipe() {
+        if (!ok()) return;
+        noise({ dur: 0.22, vol: 0.14, type: "bandpass", f: 1800, f2: 500, q: 1, attack: 0.02 });
+      },
+      // apparition d'une carte : plus elle est rare, plus la mélodie est riche
+      card(rarity) {
+        if (!ok()) return;
+        if (rarity <= 2) { tone(rarity === 1 ? 660 : 784, { dur: 0.18, vol: 0.06, type: "triangle" }); return; }
+        const notes = Math.min(rarity + 1, 7);
+        for (let i = 0; i < notes; i++) bell(SCALE[i + (rarity >= 5 ? 2 : 0)], i * 0.075, 0.06 + rarity * 0.006, 0.9);
+        if (rarity >= 4) {
+          noise({ at: 0, dur: 0.9, vol: 0.05 + (rarity - 4) * 0.03, type: "highpass", f: 7000, q: 0.3, attack: 0.1 });
+          tone(130.81, { dur: 0.8, vol: 0.12, type: "sine" });
+        }
+        if (rarity >= 5) [261.63, 329.63, 392, 523.25].forEach((f) => tone(f, { at: 0.35, dur: 1.4, vol: 0.05, type: "triangle", attack: 0.05 }));
+        if (rarity === 6) {
+          for (let i = 0; i < 8; i++) bell(SCALE[(i * 3) % SCALE.length] * 2, 0.5 + i * 0.06, 0.03, 0.6);
+          tone(65.41, { dur: 1.6, vol: 0.2, type: "sine" });
+        }
+      },
+      coin() {
+        if (!ok()) return;
+        tone(988, { dur: 0.08, vol: 0.08, type: "square" });
+        tone(1319, { at: 0.08, dur: 0.35, vol: 0.08, type: "square" });
+      },
+      flip() { if (!ok()) return; noise({ dur: 0.18, vol: 0.08, type: "bandpass", f: 900, f2: 2200, q: 1.5, attack: 0.03 }); },
+      summary() { if (!ok()) return; [0, 2, 4, 7].forEach((k, i) => bell(SCALE[k], i * 0.09, 0.05, 1)); },
+    };
+    // le navigateur n'autorise le son qu'après une action de l'utilisateur
+    addEventListener("pointerdown", () => api.unlock(), { once: true, capture: true });
+    addEventListener("keydown", () => api.unlock(), { once: true, capture: true });
+    return api;
+  })();
+
   // ───────── Silhouettes de voitures (SVG généré) ─────────
   const BODIES = {
     city:    { p: [[14,74],[14,50],[22,30],[60,22],[110,22],[140,38],[200,46],[222,52],[226,74]], w: [[26,44],[30,33],[62,27],[108,27],[133,41]], wh: [50,186,13] },
@@ -401,6 +516,7 @@
         const r = await api("/api/recycle", {});
         for (const c of Object.values(state.me.collection)) c.count = 1;
         state.me.points = r.points;
+        if (r.gained) sfx.coin();
         toast(r.gained ? `${r.cards} double${r.cards > 1 ? "s" : ""} recyclé${r.cards > 1 ? "s" : ""} : +${r.gained} points garage.` : "Aucun double à recycler.");
         refreshGarage();
       } catch (ex) { toast(ex.message); }
@@ -411,6 +527,7 @@
         state.me.points = r.points;
         state.me.packs = r.packs;
         state.me.nextPackIn = r.nextPackIn;
+        sfx.coin();
         toast("Booster acheté. Il t'attend sur le tapis.");
         if (!state.opening) render(); else refreshGarage();
       } catch (ex) { toast(ex.message); }
@@ -450,7 +567,10 @@
         ${me.packs > 0 ? (can3D() ? pack3DHTML() : packHTML(me.packs)) : `<p class="pack-empty"><strong>Plus de booster pour l'instant</strong>De nouveaux boosters arrivent automatiquement, ou achète-en un avec tes points garage.</p>`}
         <div class="reveal" id="reveal"></div>
       </div>
-      ${me.packs > 0 ? `<div class="arena__under"><button class="btn-ghost" type="button" id="auto-open">Ouvrir sans découper</button></div>` : ""}
+      ${me.packs > 0 ? `<div class="arena__under">
+        <button class="btn-ghost" type="button" id="auto-open">Ouvrir sans découper</button>
+        ${me.packs > 1 ? `<button class="btn btn--small" type="button" id="open-all">Ouvrir les ${Math.min(me.packs, 50)} boosters d'un coup</button>` : ""}
+      </div>` : ""}
       <div class="arena__panels reveal-up" style="--d:2">
         ${garageHTML()}
         <div class="panel">
@@ -474,6 +594,7 @@
       }, 1000);
     }
     bindGarage();
+    $("#open-all")?.addEventListener("click", openAll);
     const wrap3d = $("#pack3d");
     if (wrap3d && !setupPack3D(wrap3d, me.packs)) {
       wrap3d.outerHTML = packHTML(me.packs); // pas de WebGL : booster 2D
@@ -627,6 +748,7 @@
     const setCut = (v) => {
       cut = Math.min(1, Math.max(cut, v));
       p3.setCut(cut, dir);
+      sfx.cut(cut);
       fx.style.setProperty("--cut", cut.toFixed(4));
       wrap.classList.add("is-cutting");
       if (cut > 0.5 && !request) request = fetchPack();
@@ -700,6 +822,7 @@
       mode = null;
       fx.classList.remove("is-dragging");
       p3.open();
+      sfx.tear(); setTimeout(sfx.shine, 180);
       fx.classList.add("is-open");
       wrap.classList.add("is-open");
       $(".arena__under")?.remove();
@@ -719,6 +842,7 @@
     const setCut = (v) => {
       cut = Math.min(1, Math.max(cut, v));
       pack.style.setProperty("--cut", cut.toFixed(4));
+      sfx.cut(cut);
       if (cut > 0) pack.classList.add("is-cutting");
       if (cut > 0.5 && !request) request = fetchPack();
       if (cut >= 0.97) finish();
@@ -791,6 +915,7 @@
       pack.classList.remove("is-dragging");
       pack.style.setProperty("--cut", "1");
       pack.classList.add("is-open"); // la languette s'envole, la lumière sort
+      sfx.tear(); setTimeout(sfx.shine, 180);
       $(".arena__under")?.remove();
       if (!request) request = fetchPack();
       const result = await request;
@@ -799,10 +924,10 @@
     }
   }
 
-  async function fetchPack() {
+  async function fetchPack(count) {
     state.opening = true;
     try {
-      const r = await api("/api/packs/open", {});
+      const r = await api("/api/packs/open", count ? { count } : {});
       state.pending = r;
       return r;
     } catch (e) {
@@ -830,11 +955,68 @@
     newOnes.forEach((id) => state.fresh.add(id));
     state.me.packs = result.packs;
     state.me.nextPackIn = result.nextPackIn;
-    state.me.opened++;
+    state.me.opened += result.opened || 1;
     setTopbar();
     return newOnes;
   }
 
+
+  // ───────── Ouvrir tous les boosters d'un coup ─────────
+  async function openAll(e) {
+    if (state.opening) return;
+    e.currentTarget.disabled = true;
+    $("#auto-open")?.setAttribute("disabled", "");
+    const wrap = $("#pack3d") || $("#pack");
+    sfx.whoosh();
+    const result = await fetchPack("all");
+    if (!result) return;
+    // le paquet s'ouvre puis s'efface
+    if (wrap?._p3) { wrap._p3.setCut(1, 1); wrap._p3.open(); $("#pack-fx")?.classList.add("is-open"); }
+    else if (wrap) { wrap.style.setProperty("--cut", "1"); wrap.classList.add("is-cutting", "is-open"); }
+    sfx.tear(); setTimeout(sfx.shine, 180);
+    setTimeout(() => {
+      const newOnes = applyResult(result);
+      renderHaul(result, newOnes);
+    }, reduceMotion ? 0 : 900);
+  }
+
+  function renderHaul(result, newOnes) {
+    clearInterval(render.timer);
+    // regroupe les doubles du butin, les plus rares d'abord
+    const counts = new Map();
+    for (const id of result.cards) counts.set(id, (counts.get(id) || 0) + 1);
+    const list = [...counts.keys()].map((id) => state.byId[id]).sort((a, b) => b.rarity - a.rarity || a.num - b.num);
+    const fresh = list.filter((c) => newOnes.has(c.id)).length;
+    const byR = state.rarities.slice().reverse().map((r) => ({ r, n: result.cards.filter((id) => state.byId[id].rarity === r.id).length })).filter((x) => x.n);
+    const best = list[0];
+    const order = list.map((c) => c.id);
+    app.innerHTML = `<section class="page haul">
+      <div class="binder-head">
+        <div>
+          <h1 class="page__title reveal-up" style="--d:0">Ton butin</h1>
+          <p class="page__sub reveal-up" style="--d:1">${result.opened} booster${result.opened > 1 ? "s" : ""} ouvert${result.opened > 1 ? "s" : ""}, ${result.cards.length} cartes, dont ${fresh} nouvelle${fresh > 1 ? "s" : ""} pour ta collection.</p>
+        </div>
+        <div class="chips reveal-up" style="--d:2">${byR.map(({ r, n }) => `<span class="chip" style="--c:var(${RARITY_VAR[r.id]})"><b>${n}</b> ${r.name}</span>`).join("")}</div>
+      </div>
+      <div class="grid haul__grid">
+        ${list.map((c, i) => `<button class="slot haul__card${c.rarity >= 4 ? " is-rare" : ""}" type="button" data-id="${c.id}" style="--n:${Math.min(i, 40)};--hc:var(${RARITY_VAR[c.rarity]})">${cardHTML(c, { isNew: newOnes.has(c.id), count: newOnes.has(c.id) ? 0 : counts.get(c.id) })}</button>`).join("")}
+      </div>
+      <div class="haul__actions">
+        <button class="btn" type="button" id="haul-back">Retour aux boosters</button>
+        <button class="btn btn--light" type="button" id="haul-binder">Voir dans le classeur</button>
+      </div>
+    </section>`;
+    window.scrollTo({ top: 0, behavior: "auto" });
+    sfx.card(best.rarity);
+    list.slice(1, 14).forEach((c, i) => setTimeout(() => sfx.tick(), 120 + i * 45));
+    $$(".haul__card", app).forEach((b) => {
+      tilt(b, { target: $(".card", b), strength: 0.6 });
+      b.addEventListener("click", () => openViewer(b.dataset.id, order));
+    });
+    $("#haul-back").addEventListener("click", () => { state.opening = false; render(); });
+    $("#haul-binder").addEventListener("click", () => { state.opening = false; goToCard(best.id); });
+    state.opening = false;
+  }
 
   // ───────── Révélation : pile de cartes à faire glisser une par une ─────────
   function revealPack(pack, result) {
@@ -863,6 +1045,7 @@
     pack._p3?.drop();
     pack.classList.add("is-gone"); // le paquet descend, les cartes remontent
     requestAnimationFrame(() => requestAnimationFrame(() => reveal.classList.add("is-live")));
+    sfx.whoosh();
 
     const deck = $("#deck");
     const els = $$(".deck__card", deck);
@@ -878,6 +1061,7 @@
       });
       $("#deck-count").textContent = `${Math.min(idx + 1, total)} / ${total}`;
       const top = els[idx];
+      if (top && top.dataset.sound !== "1") { top.dataset.sound = "1"; setTimeout(() => sfx.card(cards[idx].rarity), idx === 0 ? 350 : 60); }
       if (top && top.classList.contains("is-rare") && !top.dataset.shown) {
         top.dataset.shown = "1";
         top.classList.add("is-intro");
@@ -888,6 +1072,7 @@
     const fling = (el, dirX, vy = 0) => {
       if (busy) return;
       busy = true;
+      sfx.swipe();
       const w = window.innerWidth;
       const from = el._dx || 0;
       el.classList.add("is-flung");
@@ -961,6 +1146,7 @@
           <button class="btn btn--light" type="button" id="to-binder">Voir dans le classeur</button>
         </div>`;
       reveal.classList.add("is-summary");
+      sfx.summary();
       $("#stage")?.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
       const order = cards.map((c) => c.id);
       $$(".summary__card", reveal).forEach((b) => {
@@ -1261,7 +1447,9 @@
     const card = $(".card", v);
     tilt(card);
     stopSway = idleSway(card);
+    if (wasHidden) sfx.whoosh(0.07);
     const flip = () => {
+      sfx.flip();
       card.classList.toggle("is-flipped");
       $("#v-flip").textContent = card.classList.contains("is-flipped") ? "Voir le recto" : "Retourner la carte";
     };
@@ -1309,6 +1497,10 @@
     render();
     window.scrollTo(0, 0);
   });
+  const muteBtn = $("#mute");
+  const syncMute = () => { muteBtn.setAttribute("aria-pressed", String(sfx.muted)); muteBtn.title = sfx.muted ? "Activer le son" : "Couper le son"; muteBtn.setAttribute("aria-label", muteBtn.title); };
+  syncMute();
+  muteBtn.addEventListener("click", () => { sfx.toggle(); syncMute(); });
   $("#logout").addEventListener("click", async () => {
     await api("/api/logout", {}).catch(() => {});
     state.me = null;
