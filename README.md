@@ -72,3 +72,7 @@ render.yaml      configuration Render (site + base)
 - Session dans un cookie HttpOnly, SameSite=Lax, Secure en HTTPS, valable 30 jours.
 - Le tirage des cartes se fait côté serveur : impossible de tricher depuis le navigateur.
 - Nombre de tentatives de connexion limité par adresse IP.
+
+## Sons
+
+Les bruitages sont de vrais enregistrements de cartes, de sachet, de jetons et de pages, tirés des packs « Casino Audio » et « RPG Audio » de [Kenney](https://kenney.nl). Ils sont sous licence CC0 (domaine public) et se trouvent dans `public/sounds/`.

@@ -103,7 +103,7 @@ setInterval(() => {
 // ───── utilitaires HTTP ─────
 const MIME = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-  ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json",
+  ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json", ".mp3": "audio/mpeg", ".txt": "text/plain; charset=utf-8",
 };
 function send(res, status, body, headers = {}) {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers });
@@ -157,7 +157,7 @@ function serveStatic(req, res, pathname) {
       const versioned = /[?&]v=/.test(req.url);
       res.writeHead(200, {
         "Content-Type": MIME[ext] || "application/octet-stream",
-        "Cache-Control": ext === ".html" ? "no-cache" : versioned ? "public, max-age=31536000, immutable" : "no-cache",
+        "Cache-Control": ext === ".html" ? "no-cache" : versioned ? "public, max-age=31536000, immutable" : pathname.startsWith("/sounds/") ? "public, max-age=604800" : "no-cache",
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "same-origin",
       });

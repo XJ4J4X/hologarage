@@ -82,113 +82,96 @@
   const recyclePoints = () => Object.entries(state.me?.collection || {}).reduce((s, [id, c]) => s + Math.max(0, c.count - 1) * (state.config.recycleValue?.[state.byId[id]?.rarity] || 1), 0);
 
 
-  // ───────── Sons (générés en direct avec la Web Audio API, aucun fichier) ─────────
+  // ───────── Sons : vrais enregistrements (Kenney, licence CC0) joués avec la Web Audio API ─────────
   const sfx = (() => {
-    let ctx = null, master = null, noiseBuf = null, lastGrain = 0;
+    const FILES = {
+      slide: ["cardSlide1", "cardSlide2", "cardSlide3", "cardSlide4", "cardSlide5", "cardSlide6"],
+      open: ["cardOpenPackage1", "cardOpenPackage2"],
+      takeout: ["cardTakeOutPackage1", "cardTakeOutPackage2"],
+      fan: ["cardFan1", "cardFan2"],
+      place: ["cardPlace1", "cardPlace2", "cardPlace3"],
+      shove: ["cardShove1", "cardShove2"],
+      shuffle: ["cardShuffle"],
+      chips: ["chipsCollide1", "chipsCollide2", "chipsHandle1"],
+      knife: ["knifeSlice", "knifeSlice2"],
+      draw: ["drawKnife1", "drawKnife2"],
+      coins: ["handleCoins", "handleCoins2"],
+      page: ["bookFlip1", "bookFlip2", "bookFlip3"],
+      book: ["bookOpen"],
+    };
+    const buffers = {};
+    let ctx = null, master = null, loading = null, lastGrain = 0, gestureStart = 0;
     let muted = store.get("hg_mute", false);
-    const ok = () => !muted && (window.AudioContext || window.webkitAudioContext);
+    const supported = !!(window.AudioContext || window.webkitAudioContext);
+
     function ac() {
       if (!ctx) {
         ctx = new (window.AudioContext || window.webkitAudioContext)();
         master = ctx.createGain();
-        master.gain.value = 0.55;
-        const comp = ctx.createDynamicsCompressor();
-        master.connect(comp); comp.connect(ctx.destination);
-        noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
-        const d = noiseBuf.getChannelData(0);
-        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        master.gain.value = 0.8;
+        master.connect(ctx.destination);
       }
       if (ctx.state === "suspended") ctx.resume();
       return ctx;
     }
-    function env(g, t, a, peak, dur) {
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(peak, t + a);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    function decode(buf) {
+      return new Promise((ok, ko) => { const p = ctx.decodeAudioData(buf, ok, ko); if (p?.then) p.then(ok, ko); });
     }
-    function tone(freq, { at = 0, dur = 0.25, type = "sine", vol = 0.15, to = null, attack = 0.005, detune = 0 } = {}) {
-      const c = ac(), t = c.currentTime + at;
-      const o = c.createOscillator(), g = c.createGain();
-      o.type = type; o.frequency.setValueAtTime(freq, t); o.detune.value = detune;
-      if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
-      env(g, t, attack, vol, dur);
-      o.connect(g); g.connect(master);
-      o.start(t); o.stop(t + dur + 0.05);
+    function load() {
+      if (loading || !supported) return loading;
+      ac();
+      const names = [...new Set(Object.values(FILES).flat())];
+      loading = Promise.all(names.map(async (n) => {
+        try {
+          const r = await fetch(`/sounds/${n}.mp3`);
+          buffers[n] = await decode(await r.arrayBuffer());
+        } catch {}
+      }));
+      return loading;
     }
-    function noise({ at = 0, dur = 0.2, vol = 0.2, type = "bandpass", f = 1200, f2 = null, q = 1, attack = 0.005 } = {}) {
-      const c = ac(), t = c.currentTime + at;
-      const s = c.createBufferSource(), fl = c.createBiquadFilter(), g = c.createGain();
-      s.buffer = noiseBuf; s.loop = true;
-      fl.type = type; fl.frequency.setValueAtTime(f, t); fl.Q.value = q;
-      if (f2) fl.frequency.exponentialRampToValueAtTime(f2, t + dur);
-      env(g, t, attack, vol, dur);
-      s.connect(fl); fl.connect(g); g.connect(master);
-      s.start(t, Math.random()); s.stop(t + dur + 0.05);
+    function play(group, { vol = 1, rate = 1, at = 0, spread = 0.06 } = {}) {
+      if (muted || !ctx) return;
+      const list = FILES[group].filter((n) => buffers[n]);
+      if (!list.length) return;
+      const src = ctx.createBufferSource(), g = ctx.createGain();
+      src.buffer = buffers[list[Math.floor(Math.random() * list.length)]];
+      src.playbackRate.value = rate * (1 + (Math.random() * 2 - 1) * spread); // petite variation naturelle
+      g.gain.value = vol;
+      src.connect(g); g.connect(master);
+      src.start(ctx.currentTime + at);
     }
-    const bell = (f, at, vol = 0.09, dur = 0.9) => {
-      tone(f, { at, dur, type: "sine", vol });
-      tone(f * 2.01, { at, dur: dur * 0.6, type: "sine", vol: vol * 0.35 });
-      tone(f * 3.02, { at, dur: dur * 0.3, type: "triangle", vol: vol * 0.12 });
-    };
-    // gamme pentatonique (do majeur) pour les mélodies de rareté
-    const SCALE = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51, 1567.98, 1760, 2093];
 
     const api = {
       get muted() { return muted; },
-      toggle() { muted = !muted; store.set("hg_mute", muted); if (!muted) api.tick(); return muted; },
-      unlock() { if (ok()) ac(); },
-      tick() { if (!ok()) return; tone(1400, { dur: 0.05, vol: 0.05, type: "triangle" }); },
-      // grain de découpe : petit crissement dont la hauteur monte avec la progression
+      toggle() { muted = !muted; store.set("hg_mute", muted); if (!muted) { load(); play("place", { vol: 0.5 }); } return muted; },
+      unlock() { if (supported && !muted) load(); else if (supported) ac(); },
+      tick() {},
+      // découpe : la lame qu'on tire, puis un frottement qui accélère avec la progression
       cut(progress) {
-        if (!ok()) return;
         const now = performance.now();
-        if (now - lastGrain < 28) return;
+        if (now - lastGrain > 450) { gestureStart = now; play("draw", { vol: 0.45 }); }
+        if (now - lastGrain < 110) return;
         lastGrain = now;
-        noise({ dur: 0.05, vol: 0.12, type: "highpass", f: 2500 + progress * 4500, q: 0.7, attack: 0.002 });
-        tone(900 + progress * 900, { dur: 0.03, vol: 0.015, type: "sawtooth" });
+        play("slide", { vol: 0.28 + progress * 0.25, rate: 1.15 + progress * 0.4, spread: 0.1 });
       },
-      tear() {
-        if (!ok()) return;
-        noise({ dur: 0.35, vol: 0.35, type: "bandpass", f: 3200, f2: 600, q: 0.8, attack: 0.003 });
-        noise({ at: 0.04, dur: 0.18, vol: 0.18, type: "highpass", f: 5000, q: 0.5 });
-        tone(110, { dur: 0.25, vol: 0.25, type: "sine", to: 55 });
-      },
-      shine() {
-        if (!ok()) return;
-        noise({ dur: 1.1, vol: 0.06, type: "highpass", f: 6000, f2: 9000, q: 0.3, attack: 0.25 });
-        [0, 2, 4, 5, 7].forEach((k, i) => bell(SCALE[k], 0.1 + i * 0.07, 0.05, 1.1));
-      },
-      whoosh(vol = 0.16) {
-        if (!ok()) return;
-        noise({ dur: 0.32, vol, type: "bandpass", f: 400, f2: 2400, q: 1.2, attack: 0.08 });
-      },
-      swipe() {
-        if (!ok()) return;
-        noise({ dur: 0.22, vol: 0.14, type: "bandpass", f: 1800, f2: 500, q: 1, attack: 0.02 });
-      },
-      // apparition d'une carte : plus elle est rare, plus la mélodie est riche
+      tear() { play("open", { vol: 1, spread: 0.03 }); play("knife", { vol: 0.25, rate: 1.2 }); },
+      shine() { play("takeout", { vol: 0.9, at: 0.25 }); },
+      whoosh(vol = 0.5) { play("slide", { vol: Math.min(1, vol * 3), rate: 0.9 }); },
+      swipe() { play("slide", { vol: 0.8, rate: 1.05, spread: 0.12 }); },
+      // apparition d'une carte : claquement plus franc et cliquetis selon la rareté
       card(rarity) {
-        if (!ok()) return;
-        if (rarity <= 2) { tone(rarity === 1 ? 660 : 784, { dur: 0.18, vol: 0.06, type: "triangle" }); return; }
-        const notes = Math.min(rarity + 1, 7);
-        for (let i = 0; i < notes; i++) bell(SCALE[i + (rarity >= 5 ? 2 : 0)], i * 0.075, 0.06 + rarity * 0.006, 0.9);
-        if (rarity >= 4) {
-          noise({ at: 0, dur: 0.9, vol: 0.05 + (rarity - 4) * 0.03, type: "highpass", f: 7000, q: 0.3, attack: 0.1 });
-          tone(130.81, { dur: 0.8, vol: 0.12, type: "sine" });
-        }
-        if (rarity >= 5) [261.63, 329.63, 392, 523.25].forEach((f) => tone(f, { at: 0.35, dur: 1.4, vol: 0.05, type: "triangle", attack: 0.05 }));
-        if (rarity === 6) {
-          for (let i = 0; i < 8; i++) bell(SCALE[(i * 3) % SCALE.length] * 2, 0.5 + i * 0.06, 0.03, 0.6);
-          tone(65.41, { dur: 1.6, vol: 0.2, type: "sine" });
-        }
+        if (rarity <= 2) { play("place", { vol: 0.45 + rarity * 0.1 }); return; }
+        play("shove", { vol: 0.9 });
+        if (rarity >= 4) play("chips", { vol: 0.35 + (rarity - 4) * 0.15, at: 0.08 });
+        if (rarity >= 5) play("coins", { vol: 0.4, at: 0.18 });
+        if (rarity === 6) { play("fan", { vol: 0.8, at: 0.04 }); play("coins", { vol: 0.5, at: 0.45, rate: 1.1 }); }
       },
-      coin() {
-        if (!ok()) return;
-        tone(988, { dur: 0.08, vol: 0.08, type: "square" });
-        tone(1319, { at: 0.08, dur: 0.35, vol: 0.08, type: "square" });
-      },
-      flip() { if (!ok()) return; noise({ dur: 0.18, vol: 0.08, type: "bandpass", f: 900, f2: 2200, q: 1.5, attack: 0.03 }); },
-      summary() { if (!ok()) return; [0, 2, 4, 7].forEach((k, i) => bell(SCALE[k], i * 0.09, 0.05, 1)); },
+      coin() { play("coins", { vol: 0.8 }); },
+      flip() { play("slide", { vol: 0.55, rate: 1.3 }); },
+      summary() { play("fan", { vol: 0.9 }); },
+      shuffle() { play("shuffle", { vol: 0.9 }); },
+      page() { play("page", { vol: 0.7 }); },
+      book() { play("book", { vol: 0.8 }); },
     };
     // le navigateur n'autorise le son qu'après une action de l'utilisateur
     addEventListener("pointerdown", () => api.unlock(), { once: true, capture: true });
@@ -1007,8 +990,9 @@
       </div>
     </section>`;
     window.scrollTo({ top: 0, behavior: "auto" });
-    sfx.card(best.rarity);
-    list.slice(1, 14).forEach((c, i) => setTimeout(() => sfx.tick(), 120 + i * 45));
+    sfx.shuffle();
+    setTimeout(() => sfx.card(best.rarity), 650);
+    setTimeout(() => sfx.summary(), 1100);
     $$(".haul__card", app).forEach((b) => {
       tilt(b, { target: $(".card", b), strength: 0.6 });
       b.addEventListener("click", () => openViewer(b.dataset.id, order));
@@ -1322,6 +1306,7 @@
       const forward = k > b.spread;
       const from = b.spread;
       b.spread = k;
+      sfx.page();
       leafEls.forEach((leaf, i) => {
         const should = i < k;
         if (should !== leaf.classList.contains("is-flipped")) {
@@ -1341,7 +1326,7 @@
     update();
     $("#prev").addEventListener("click", () => go(b.spread - 1));
     $("#next").addEventListener("click", () => go(b.spread + 1));
-    $("[data-open]", book)?.addEventListener("click", (e) => { e.stopPropagation(); go(1); });
+    $("[data-open]", book)?.addEventListener("click", (e) => { e.stopPropagation(); sfx.book(); go(1); });
     book._go = go;
 
     // glisser pour tourner les pages
