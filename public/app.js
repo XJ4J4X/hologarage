@@ -234,7 +234,6 @@
 
   // ───────── Carte (recto) ─────────
   function cardHTML(car, { locked = false, count = 0, isNew = false, back = false } = {}) {
-    const pips = "<i></i>".repeat(car.rarity);
     const photo = !locked && car.img;
     const badge = isNew ? `<span class="card__badge card__badge--new">Nouvelle</span>` : count > 1 ? `<span class="card__badge">×${count}</span>` : "";
     const modelCls = car.model.length > 16 ? " is-xlong" : car.model.length > 11 ? " is-long" : "";
@@ -242,25 +241,27 @@
     return `<div class="card r${car.rarity}${locked ? " is-locked" : ""}" data-id="${car.id}">
       <div class="card__tilt">
         <div class="card__face card__front">
+          <header class="card__head">
+            <span class="card__rar"><i aria-hidden="true"></i>${rarityName(car.rarity)}</span>
+            <span class="card__num">${pad(car.num)}<em>/${state.catalog.length}</em></span>
+          </header>
           <div class="card__media${photo ? " has-photo" : ""}">
             ${photo ? photoHTML(car) : ""}${carSVG(car, locked)}
             ${locked ? `<span class="card__lock" aria-hidden="true">?</span>` : ""}
           </div>
-          <div class="card__top">
-            <span class="card__rar"><span class="card__pips" aria-hidden="true">${pips}</span>${rarityName(car.rarity)}</span>
-            <span class="card__num">${pad(car.num)}</span>
+          <div class="card__title">
+            <span class="card__brand">${locked ? "Carte à découvrir" : esc(car.brand)}</span>
+            <h3 class="card__model${modelCls}">${locked ? "???" : esc(car.model)}</h3>
           </div>
-          <div class="card__panel">
-            <div class="card__title">
-              <span class="card__brand">${locked ? "À découvrir" : esc(car.brand)}${locked ? "" : `<em>${FLAGS[car.country] || ""} ${car.year}</em>`}</span>
-              <h3 class="card__model${modelCls}">${locked ? "???" : esc(car.model)}</h3>
-            </div>
-            <div class="card__specs">
-              ${spec(fmtNum(car.hp), "ch", "Puissance")}
-              ${spec(fmtAcc(car.acc), car.acc == null ? "" : "s", "0–100")}
-              ${spec(car.vmax ? fmtNum(car.vmax) : "—", car.vmax ? "km/h" : "", "V. max")}
-            </div>
+          <div class="card__specs">
+            ${spec(fmtNum(car.hp), "ch", "Puissance")}
+            ${spec(fmtAcc(car.acc), car.acc == null ? "" : "s", "0 à 100")}
+            ${spec(car.vmax ? fmtNum(car.vmax) : "—", car.vmax ? "km/h" : "", "Vitesse max")}
           </div>
+          <footer class="card__foot">
+            <span class="card__engine">${locked ? BODY_LABEL[car.body] || "" : esc(car.engine)}</span>
+            <span>${locked ? "" : `${FLAGS[car.country] || ""} ${car.year}`}</span>
+          </footer>
           <div class="card__holo"></div><div class="card__sparkle"></div><div class="card__glare"></div>
         </div>
         ${back ? cardBackHTML(car, locked) : ""}
@@ -446,7 +447,7 @@
         <div class="stat"><b id="stat-points">${fmtNum(me.points || 0)}</b><span>points garage</span></div>
       </div>
       <div class="stage" id="stage">
-        ${me.packs > 0 ? packHTML(me.packs) : `<p class="pack-empty"><strong>Plus de booster pour l'instant</strong>De nouveaux boosters arrivent automatiquement, ou achète-en un avec tes points garage.</p>`}
+        ${me.packs > 0 ? (can3D() ? pack3DHTML() : packHTML(me.packs)) : `<p class="pack-empty"><strong>Plus de booster pour l'instant</strong>De nouveaux boosters arrivent automatiquement, ou achète-en un avec tes points garage.</p>`}
         <div class="reveal" id="reveal"></div>
       </div>
       ${me.packs > 0 ? `<div class="arena__under"><button class="btn-ghost" type="button" id="auto-open">Ouvrir sans découper</button></div>` : ""}
@@ -473,6 +474,10 @@
       }, 1000);
     }
     bindGarage();
+    const wrap3d = $("#pack3d");
+    if (wrap3d && !setupPack3D(wrap3d, me.packs)) {
+      wrap3d.outerHTML = packHTML(me.packs); // pas de WebGL : booster 2D
+    }
     const pack = $("#pack");
     if (pack) {
       tilt(pack, { strength: 0.8 });
@@ -581,6 +586,131 @@
     </div>`;
   }
   const packWord = (n) => (n > 1 ? "boosters" : "booster");
+
+  // ───────── Booster 3D temps réel ─────────
+  let webglOK = null;
+  function can3D() {
+    if (!window.Pack3D) return false;
+    if (webglOK === null) {
+      try { const c = document.createElement("canvas"); webglOK = !!(c.getContext("webgl")); } catch { webglOK = false; }
+    }
+    return webglOK;
+  }
+  function pack3DHTML() {
+    return `<div class="pack3d" id="pack3d" aria-label="Booster en 3D : trace un trait sur la ligne pointillée pour l'ouvrir, ou fais-le tourner">
+      <canvas class="pack3d__canvas"></canvas>
+      <div class="pack3d__fx" id="pack-fx">
+        <div class="pack__light"></div>
+        <div class="pack__cutline"></div>
+        <div class="pack__spark"></div>
+      </div>
+      <div class="pack3d__hint"><span class="pack__finger"></span>Trace un trait sur la ligne pour ouvrir · fais-le tourner pour voir le dos</div>
+    </div>`;
+  }
+  function setupPack3D(wrap, n) {
+    const canvas = $("canvas", wrap), fx = $("#pack-fx", wrap);
+    const p3 = window.Pack3D.create(canvas, { stack: Math.min(n, 4) - 1, cards: state.config.cardsPerPack });
+    if (!p3) return false;
+    wrap._p3 = p3;
+    const place = () => {
+      const r = p3.rect();
+      Object.assign(fx.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px" });
+    };
+    place();
+    const ro = new ResizeObserver(place); ro.observe(wrap);
+
+    let mode = null, cut = 0, dir = 0, finished = false, request = null, lastFlake = 0;
+    const ratio = (e) => {
+      const r = p3.rect(), b = canvas.getBoundingClientRect();
+      return { x: (e.clientX - b.left - r.left) / r.width, y: (e.clientY - b.top - r.top) / r.height };
+    };
+    const setCut = (v) => {
+      cut = Math.min(1, Math.max(cut, v));
+      p3.setCut(cut, dir);
+      fx.style.setProperty("--cut", cut.toFixed(4));
+      wrap.classList.add("is-cutting");
+      if (cut > 0.5 && !request) request = fetchPack();
+      if (cut >= 0.97) finish();
+    };
+    const flake = () => {
+      const now = performance.now();
+      if (reduceMotion || now - lastFlake < 30) return;
+      lastFlake = now;
+      const f = document.createElement("i");
+      f.className = "pack__flake";
+      f.style.left = `${(dir > 0 ? cut : 1 - cut) * 100}%`;
+      f.style.setProperty("--h", Math.floor(Math.random() * 360));
+      fx.appendChild(f);
+      const dx = (Math.random() - 0.5) * 70 - dir * 20, dy = 40 + Math.random() * 100, rot = (Math.random() - 0.5) * 720;
+      f.animate([{ transform: "translate(-50%,-50%) scale(1)", opacity: 1 }, { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) rotate(${rot}deg) scale(.3)`, opacity: 0 }],
+        { duration: 600 + Math.random() * 500, easing: "cubic-bezier(.2,.6,.4,1)" }).onfinish = () => f.remove();
+    };
+    wrap.addEventListener("pointermove", (e) => {
+      const b = wrap.getBoundingClientRect();
+      if (!mode) p3.setHover(((e.clientX - b.left) / b.width - 0.5) * 2, ((e.clientY - b.top) / b.height - 0.5) * 2);
+      if (mode === "spin") p3.moveSpin(e.clientX);
+      if (mode === "cut" && !finished) {
+        const { x } = ratio(e);
+        const p = dir > 0 ? x : 1 - x;
+        if (p > cut && p <= cut + 0.35) { setCut(p); flake(); }
+      }
+    });
+    wrap.addEventListener("pointerleave", () => { if (!mode) p3.setHover(0, 0); });
+    wrap.addEventListener("pointerdown", (e) => {
+      if (finished) return;
+      const { x, y } = ratio(e);
+      wrap.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      if (p3.facingFront() && Math.abs(y - p3.line) < 0.12 && x > -0.08 && x < 1.08) {
+        mode = "cut";
+        if (!dir) { dir = x < 0.5 ? 1 : -1; fx.classList.toggle("is-rtl", dir < 0); }
+        fx.classList.add("is-dragging");
+      } else {
+        mode = "spin";
+        p3.startSpin(e.clientX);
+        wrap.classList.add("is-spinning");
+      }
+    });
+    const end = () => {
+      if (mode === "spin") p3.endSpin();
+      mode = null;
+      fx.classList.remove("is-dragging");
+      wrap.classList.remove("is-spinning");
+    };
+    wrap.addEventListener("pointerup", end);
+    wrap.addEventListener("pointercancel", end);
+
+    $("#auto-open")?.addEventListener("click", () => {
+      if (finished) return;
+      if (!dir) dir = 1;
+      const from = cut, t0 = performance.now(), dur = reduceMotion ? 1 : 700;
+      fx.classList.add("is-dragging");
+      const step = (t) => {
+        const k = Math.min(1, (t - t0) / dur);
+        setCut(from + (1 - from) * (1 - Math.pow(1 - k, 3)));
+        flake();
+        if (k < 1 && !finished) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+
+    async function finish() {
+      if (finished) return;
+      finished = true;
+      mode = null;
+      fx.classList.remove("is-dragging");
+      p3.open();
+      fx.classList.add("is-open");
+      wrap.classList.add("is-open");
+      $(".arena__under")?.remove();
+      if (!request) request = fetchPack();
+      const result = await request;
+      ro.disconnect();
+      if (!result) return;
+      setTimeout(() => revealPack(wrap, result), reduceMotion ? 0 : 800);
+    }
+    return true;
+  }
 
   // ───────── Découpe façon Pokémon TCG Pocket : un geste horizontal sur le haut du paquet ─────────
   const CUT_Y = 0.17; // hauteur de la ligne de découpe (en fraction de la hauteur du paquet)
@@ -730,6 +860,7 @@
         <span class="deck__tip">Glisse la carte sur le côté ou touche-la pour voir la suivante</span>
         <button class="btn-ghost" type="button" id="deck-skip">Tout voir</button>
       </div>`;
+    pack._p3?.drop();
     pack.classList.add("is-gone"); // le paquet descend, les cartes remontent
     requestAnimationFrame(() => requestAnimationFrame(() => reveal.classList.add("is-live")));
 
